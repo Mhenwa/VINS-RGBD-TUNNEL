@@ -23,11 +23,6 @@
 #include <queue>
 #include <opencv2/core/eigen.hpp>
 
-#include <sophus/se3.h>
-#include <sophus/so3.h>
-using Sophus::SE3;
-using Sophus::SO3;
-
 class Estimator
 {
   public:

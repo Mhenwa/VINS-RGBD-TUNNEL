@@ -1,0 +1,42 @@
+# ROS / catkin
+/build/
+/devel/
+/install/
+/log/
+/logs/
+/.catkin_tools/
+/.catkin_workspace
+catkin_generated/
+
+# Local Docker workspace and outputs
+/.docker_catkin_ws/
+/.docker_output/
+
+# CMake / build system
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+Makefile
+Testing/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE / editor
+/.vscode/
+/.idea/
+/.codex
+/.codex/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local datasets / runtime artifacts
+*.bag
+*.db3
+*.active
+*.orig.active

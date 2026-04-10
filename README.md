@@ -1,3 +1,36 @@
+2026.4.3
+
+删除了了Shpous，把对应部分换成了OpenCV
+
+不要用sudo进！！！
+
+## docker
+
+```bash
+docker build -t vins-rgbd:melodic -f docker/Dockerfile .
+./docker/run_container.sh
+```
+
+进容器后：
+```bash
+./docker/build_in_container.sh
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+roslaunch vins_estimator realsense_color.launch
+```
+
+另一个终端播包：
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+rosbag play /data/Normal.bag
+```
+
+
+---
+
+
 ## RGBD-Inertial Trajectory Estimation and Mapping for Small Ground Rescue Robot
 Based one open source SLAM framework [VINS-Mono](https://github.com/HKUST-Aerial-Robotics/VINS-Mono).
 
@@ -35,12 +68,6 @@ Shan, Zeyong, Ruijian Li, and Sören Schwertfeger. "RGBD-inertial trajectory est
 
 1.3. **Ceres Solver**
 Follow [Ceres Installation](http://ceres-solver.org/installation.html)
-
-1.4. **Sophus**
-```
-  git clone http://github.com/strasdat/Sophus.git
-  git checkout a621ff
-```
 
 
 ## 2. Datasets
