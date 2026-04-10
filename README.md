@@ -6,6 +6,7 @@
 
 ## docker
 
+### 第一个终端
 ```bash
 docker build -t vins-rgbd:melodic -f docker/Dockerfile .
 ./docker/run_container.sh
@@ -19,13 +20,29 @@ source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 roslaunch vins_estimator realsense_color.launch
 ```
 
-另一个终端播包：
+换成ground challenge的配置文件
+```bash
+roslaunch vins_estimator realsense_color.launch \
+  config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_config.yaml \
+  depth_config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_depth_config.yaml
+
+```
+### 新建终端打开可视化：
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+roslaunch vins_estimator vins_rviz.launch
+```
+
+### 另一个终端播包：
 ```bash
 docker exec -it vins-rgbd bash
 source /opt/ros/melodic/setup.bash
 source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 rosbag play /data/Normal.bag
 ```
+
 
 
 ---
