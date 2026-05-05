@@ -8,7 +8,7 @@
 /.catkin_workspace
 catkin_generated/
 
-# Local Docker workspace and outputs
+# Local Docker workspace
 /.docker_catkin_ws/
 /.docker_output/
 
@@ -40,3 +40,6 @@ Thumbs.db
 *.db3
 *.active
 *.orig.active
+
+# Runtime / evaluation / plotting outputs
+/output/

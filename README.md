@@ -20,6 +20,15 @@ source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 roslaunch vins_estimator realsense_color.launch
 ```
 
+运行输出统一写到仓库根目录的 `output/`。在容器里对应路径是 `/home/shanzy/output/`：
+
+- `output/vins/`：VINS 运行结果 CSV 和外参标定结果
+- `output/eval/`：和 GT 对齐后的评估结果、误差图
+- `output/plots/`：只画运行轨迹的图
+- `output/gt/`：单独画 GT 的图
+- `output/pose_graph/`：pose graph 保存/加载目录
+- `output/pcd/`：pose graph 按键导出的 PCD
+
 换成ground challenge的配置文件
 ```bash
 roslaunch vins_estimator realsense_color.launch \
@@ -42,6 +51,39 @@ source /opt/ros/melodic/setup.bash
 source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 rosbag play /data/Normal.bag
 ```
+
+### 跑完后和 Ground-Challenge 的 `psudo_gt` 比较：
+```bash
+python3 tools/eval_ground_challenge.py \
+  --est output/vins/vins_result_loop.csv \
+  --seq darkroom1.bag \
+  --gt-root /home/mhenwa/slam/Ground-Challenge/psudo_gt \
+  --out-dir output/eval/darkroom1 \
+  --name loop
+```
+
+会输出：
+
+- `<name>_metrics.json`
+- `<name>_aligned_est.txt`
+- `<name>_gt_used.txt`
+- `<name>_traj_xy.png`
+- `<name>_traj_xyz_time.png`
+- `<name>_trans_error_time.png`
+
+### 直接读取指定 `psudo_gt` 文件并画真值轨迹：
+```bash
+python3 tools/plot_ground_challenge_gt.py \
+  --gt /home/mhenwa/slam/Ground-Challenge/psudo_gt/darkroom1.txt \
+  --out-dir output/gt/darkroom1 \
+  --name darkroom1_gt
+```
+
+会输出：
+
+- `<name>_trajectory.txt`
+- `<name>_traj_xy.png`
+- `<name>_traj_xyz_time.png`
 
 
 

@@ -14,7 +14,7 @@
 /data/Normal.bag
 ```
 
-同时，项目配置文件里默认输出目录是 `/home/shanzy/output/`，脚本已经把宿主机目录挂载到这个路径，不需要额外改 yaml。
+同时，项目配置文件里默认运行结果目录是 `/home/shanzy/output/vins/`，脚本会把宿主机 `output/` 挂载到 `/home/shanzy/output/` 并预创建常用子目录。
 
 ## 1. 文件说明
 
@@ -158,7 +158,7 @@ roslaunch vins_estimator vins_rviz.launch
 
 - 宿主机输出结果：
 ```bash
-<repo>/.docker_output
+<repo>/output
 ```
 
 ## 9. 最小使用流程

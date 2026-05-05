@@ -76,9 +76,38 @@ nav_msgs::Path no_loop_path;
 std::string BRIEF_PATTERN_FILE;
 std::string POSE_GRAPH_SAVE_PATH;
 std::string VINS_RESULT_PATH;
+std::string OUTPUT_PATH;
+std::string PCD_OUTPUT_PATH;
 CameraPoseVisualization cameraposevisual(1, 0, 0, 1);
 Eigen::Vector3d last_t(-100, -100, -100);
 double last_image_time = -1;
+
+string trimTrailingSlash(string path)
+{
+    while (path.size() > 1 && path.back() == '/')
+        path.pop_back();
+    return path;
+}
+
+string parentPath(const string &path)
+{
+    string clean_path = trimTrailingSlash(path);
+    size_t slash_pos = clean_path.find_last_of('/');
+    if (slash_pos == string::npos)
+        return "";
+    if (slash_pos == 0)
+        return "/";
+    return clean_path.substr(0, slash_pos);
+}
+
+string joinPath(const string &base, const string &name)
+{
+    if (base.empty())
+        return name;
+    if (base.back() == '/')
+        return base + name;
+    return base + "/" + name;
+}
 
 //not used in my case, just ignore sequence 1-5
 void new_sequence()
@@ -521,7 +550,7 @@ void command()
             TicToc t_pcdfile;
             posegraph.save_cloud->width = posegraph.save_cloud->points.size();
             posegraph.save_cloud->height = 1;
-	        pcl::io::savePCDFileASCII("/home/riger/pcd_file_"+to_string(frame_index)+"keyframes.pcd", *(posegraph.save_cloud));
+	        pcl::io::savePCDFileASCII(joinPath(PCD_OUTPUT_PATH, "pcd_file_" + to_string(frame_index) + "keyframes.pcd"), *(posegraph.save_cloud));
             printf("Save pcd file done! Time cost: %f", t_pcdfile.toc());
         }
         std::chrono::milliseconds dura(5);
@@ -589,7 +618,9 @@ int main(int argc, char **argv)
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["depth_topic"] >> DEPTH_TOPIC;
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
-        fsSettings["output_path"] >> VINS_RESULT_PATH;
+        fsSettings["output_path"] >> OUTPUT_PATH;
+        PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");
+        VINS_RESULT_PATH = OUTPUT_PATH;
         fsSettings["save_image"] >> DEBUG_IMAGE;
 
         cv::Mat cv_qid, cv_tid;

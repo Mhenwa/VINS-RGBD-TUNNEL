@@ -7,7 +7,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 image_name="${IMAGE_NAME:-vins-rgbd:melodic}"
 container_name="${CONTAINER_NAME:-vins-rgbd}"
 bag_input="${1:-${BAG_PATH:-/home/mhenwa/slam/bags/Normal.bag}}"
-output_dir="${OUTPUT_DIR:-${repo_root}/.docker_output}"
+output_dir="${OUTPUT_DIR:-${repo_root}/output}"
 workspace_dir="${WORKSPACE_DIR:-${repo_root}/.docker_catkin_ws}"
 host_uid="$(id -u)"
 host_gid="$(id -g)"
@@ -23,7 +23,13 @@ else
   exit 1
 fi
 
-mkdir -p "${output_dir}"
+mkdir -p \
+  "${output_dir}/vins" \
+  "${output_dir}/eval" \
+  "${output_dir}/plots" \
+  "${output_dir}/gt" \
+  "${output_dir}/pose_graph" \
+  "${output_dir}/pcd"
 mkdir -p "${workspace_dir}"
 
 xhost +local: >/dev/null 2>&1 || true
