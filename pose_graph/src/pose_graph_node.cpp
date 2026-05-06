@@ -617,6 +617,12 @@ int main(int argc, char **argv)
 
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["depth_topic"] >> DEPTH_TOPIC;
+        std::string image_topic_override;
+        if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+        {
+            IMAGE_TOPIC = image_topic_override;
+            ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+        }
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
         fsSettings["output_path"] >> OUTPUT_PATH;
         PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");

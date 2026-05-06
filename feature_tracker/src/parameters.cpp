@@ -48,6 +48,12 @@ void readParameters(ros::NodeHandle &n)
 
     fsSettings["image_topic"] >> IMAGE_TOPIC;
     fsSettings["depth_topic"] >> DEPTH_TOPIC;
+    std::string image_topic_override;
+    if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+    {
+        IMAGE_TOPIC = image_topic_override;
+        ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+    }
     fsSettings["imu_topic"] >> IMU_TOPIC;
     MAX_CNT = fsSettings["max_cnt"];
     MIN_DIST = fsSettings["min_dist"];

@@ -37,3 +37,7 @@ add_executable(feature_tracker
 
 target_link_libraries(feature_tracker ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
+catkin_install_python(PROGRAMS
+    scripts/zero_dce_enhancer_node.py
+    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

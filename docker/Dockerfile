@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    rsync \
     xauth \
     libeigen3-dev \
     libopencv-dev \
@@ -15,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgflags-dev \
     libboost-all-dev \
     python-catkin-tools \
+    python-pip \
+    python-opencv \
     ros-melodic-cv-bridge \
     ros-melodic-tf \
     ros-melodic-pcl-ros \
@@ -22,6 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-melodic-image-transport \
     ros-melodic-message-filters \
  && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir --upgrade "pip<21" setuptools wheel future \
+ && python -m pip install --no-cache-dir torch==1.4.0+cpu \
+      -f https://download.pytorch.org/whl/torch_stable.html
 
 WORKDIR /workspace/VINS-RGBD
 
