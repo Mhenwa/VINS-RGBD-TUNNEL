@@ -7,6 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     git \
     xauth \
+    autoconf \
+    libtool \
+    rsync \
+    protobuf-compiler \
+    libssl-dev \
+    zlib1g-dev \
     libeigen3-dev \
     libopencv-dev \
     libceres-dev \
@@ -15,7 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgflags-dev \
     libboost-all-dev \
     python-catkin-tools \
+    python-numpy \
+    python-wstool \
     ros-melodic-cv-bridge \
+    ros-melodic-cmake-modules \
     ros-melodic-tf \
     ros-melodic-pcl-ros \
     ros-melodic-pcl-conversions \

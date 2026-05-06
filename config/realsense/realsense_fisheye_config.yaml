@@ -14,6 +14,7 @@ l_boundary: 40
 r_boundary: 40
 pcl_min_dist: 0.3
 pcl_max_dist: 6
+pcl_filter_min_density: 2
 
 #camera calibration 
 model_type: KANNALA_BRANDT
