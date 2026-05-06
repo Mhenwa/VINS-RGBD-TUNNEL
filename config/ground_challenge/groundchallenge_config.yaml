@@ -16,6 +16,17 @@ r_boundary: 40
 pcl_min_dist: 0.3
 pcl_max_dist: 6
 resolution: 0.02
+pcl_filter_min_density: 2
+
+# depth-to-map residual (default off)
+use_depth_to_map: 0
+use_depth_to_map_pose_graph: 0
+depth_map_weight: 100.0
+depth_map_huber: 1.0
+depth_map_min_edges: 50
+depth_map_max_edges_per_frame: 800
+depth_map_rebuild_each_iteration: 1
+depth_cloud_sync_tol: 0.02
 
 #camera calibration
 

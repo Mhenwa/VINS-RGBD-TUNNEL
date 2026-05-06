@@ -22,6 +22,13 @@ std::string VINS_RESULT_PATH;
 std::string IMU_TOPIC;
 double ROW, COL;
 double TD, TR;
+int USE_DEPTH_TO_MAP = 0;
+int DEPTH_MAP_REBUILD_EACH_ITERATION = 1;
+double DEPTH_MAP_WEIGHT = 100.0;
+double DEPTH_MAP_HUBER = 1.0;
+int DEPTH_MAP_MIN_EDGES = 50;
+int DEPTH_MAP_MAX_EDGES_PER_FRAME = 800;
+double DEPTH_CLOUD_SYNC_TOL = 0.02;
 
 template <typename T>
 T readParam(ros::NodeHandle &n, std::string name)
@@ -128,6 +135,24 @@ void readParameters(ros::NodeHandle &n)
     {
         TR = 0;
     }
+
+    if (!fsSettings["use_depth_to_map"].empty())
+        USE_DEPTH_TO_MAP = fsSettings["use_depth_to_map"];
+    if (!fsSettings["depth_map_weight"].empty())
+        DEPTH_MAP_WEIGHT = fsSettings["depth_map_weight"];
+    if (!fsSettings["depth_map_huber"].empty())
+        DEPTH_MAP_HUBER = fsSettings["depth_map_huber"];
+    if (!fsSettings["depth_map_min_edges"].empty())
+        DEPTH_MAP_MIN_EDGES = fsSettings["depth_map_min_edges"];
+    if (!fsSettings["depth_map_max_edges_per_frame"].empty())
+        DEPTH_MAP_MAX_EDGES_PER_FRAME = fsSettings["depth_map_max_edges_per_frame"];
+    if (!fsSettings["depth_map_rebuild_each_iteration"].empty())
+        DEPTH_MAP_REBUILD_EACH_ITERATION = fsSettings["depth_map_rebuild_each_iteration"];
+    if (!fsSettings["depth_cloud_sync_tol"].empty())
+        DEPTH_CLOUD_SYNC_TOL = fsSettings["depth_cloud_sync_tol"];
+    ROS_INFO("depth-to-map vio: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d sync_tol: %.3f",
+             USE_DEPTH_TO_MAP, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
+             DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME, DEPTH_CLOUD_SYNC_TOL);
     
     fsSettings.release();
 }

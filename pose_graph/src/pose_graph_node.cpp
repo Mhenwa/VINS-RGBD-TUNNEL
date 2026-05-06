@@ -13,6 +13,7 @@
 
 #include <visualization_msgs/Marker.h>
 #include <std_msgs/Bool.h>
+#include <std_srvs/Trigger.h>
 #include <cv_bridge/cv_bridge.h>
 #include <iostream>
 #include <ros/package.h>
@@ -47,6 +48,7 @@ bool start_flag = 0;
 double SKIP_DIS = 0;
 
 float PCL_MAX_DIST, PCL_MIN_DIST, RESOLUTION;
+int PCL_FILTER_MIN_DENSITY = 2;
 int U_BOUNDARY, D_BOUNDARY, L_BOUNDARY, R_BOUNDARY;
 int VISUALIZATION_SHIFT_X;
 int VISUALIZATION_SHIFT_Y;
@@ -57,6 +59,11 @@ int DEBUG_IMAGE;
 int VISUALIZE_IMU_FORWARD;
 int LOOP_CLOSURE;
 int FAST_RELOCALIZATION;
+int USE_DEPTH_TO_MAP_POSE_GRAPH = 0;
+double DEPTH_MAP_WEIGHT = 100.0;
+double DEPTH_MAP_HUBER = 1.0;
+int DEPTH_MAP_MIN_EDGES = 50;
+int DEPTH_MAP_MAX_EDGES_PER_FRAME = 800;
 
 
 camodocal::CameraPtr m_camera;
@@ -78,6 +85,30 @@ std::string POSE_GRAPH_SAVE_PATH;
 std::string VINS_RESULT_PATH;
 std::string OUTPUT_PATH;
 std::string PCD_OUTPUT_PATH;
+
+bool savePoseGraphOutputs(std::string *message)
+{
+    if (!LOOP_CLOSURE)
+    {
+        if (message)
+            *message = "loop closure is disabled; pose graph outputs are not active";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_process);
+    posegraph.savePoseGraph();
+    posegraph.saveVoxbloxMap();
+    if (message)
+        *message = "saved pose graph and Voxblox outputs";
+    return true;
+}
+
+bool saveMapService(std_srvs::Trigger::Request & /*request*/,
+                    std_srvs::Trigger::Response &response)
+{
+    response.success = savePoseGraphOutputs(&response.message);
+    return true;
+}
 CameraPoseVisualization cameraposevisual(1, 0, 0, 1);
 Eigen::Vector3d last_t(-100, -100, -100);
 double last_image_time = -1;
@@ -428,6 +459,30 @@ void process()
             else
                 ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
 
+            cv::Mat color_image;
+            try
+            {
+                if (image_msg->encoding == sensor_msgs::image_encodings::BGR8)
+                    color_image = cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGR8)->image.clone();
+                else if (image_msg->encoding == sensor_msgs::image_encodings::RGB8)
+                    color_image = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8)->image;
+                else if (image_msg->encoding == sensor_msgs::image_encodings::BGRA8)
+                    cv::cvtColor(cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGRA8)->image,
+                                 color_image, cv::COLOR_BGRA2BGR);
+                else if (image_msg->encoding == sensor_msgs::image_encodings::RGBA8)
+                    cv::cvtColor(cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::RGBA8)->image,
+                                 color_image, cv::COLOR_RGBA2BGR);
+                else if (image_msg->encoding == "8UC3")
+                    color_image = cv_bridge::toCvShare(image_msg)->image.clone();
+                else
+                    cv::cvtColor(ptr->image, color_image, cv::COLOR_GRAY2BGR);
+            }
+            catch (const cv_bridge::Exception &e)
+            {
+                ROS_WARN("Failed to convert image to BGR for dense map color: %s", e.what());
+                cv::cvtColor(ptr->image, color_image, cv::COLOR_GRAY2BGR);
+            }
+
             //depth has encoding TYPE_16UC1
             cv_bridge::CvImageConstPtr depth_ptr;
             // debug use     std::cout<<depth_msg->encoding<<std::endl;
@@ -459,6 +514,7 @@ void process()
                 vector<cv::Point2f> point_2d_uv;
                 vector<cv::Point2f> point_2d_normal;
                 vector<cv::Point3f> point_3d_depth;
+                vector<cv::Vec3b> point_3d_depth_color;
                 vector<double> point_id;
 
                 for (unsigned int i = 0; i < point_msg->points.size(); i++)
@@ -497,6 +553,10 @@ void process()
                         {
                             //debug: ++count_;
                             point_3d_depth.push_back(cv::Point3f(b.x() * depth_val, b.y() * depth_val, depth_val));
+                            if (j >= 0 && j < color_image.rows && i >= 0 && i < color_image.cols)
+                                point_3d_depth_color.push_back(color_image.at<cv::Vec3b>(j, i));
+                            else
+                                point_3d_depth_color.push_back(cv::Vec3b(128, 128, 128));
                         }
                     }
                 }
@@ -504,7 +564,8 @@ void process()
 
                 // 通过frame_index标记对应帧
                 // add sparse depth img to this class
-                KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), frame_index, T, R, image, point_3d_depth,
+                KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), frame_index, T, R, image,
+                                   point_3d_depth, point_3d_depth_color,
                                    point_3d, point_2d_uv, point_2d_normal, point_id, sequence);
                 m_process.lock();
                 start_flag = 1;
@@ -529,9 +590,7 @@ void command()
         char c = getchar();
         if (c == 's')
         {
-            m_process.lock();
-            posegraph.savePoseGraph();
-            m_process.unlock();
+            savePoseGraphOutputs(NULL);
             printf("save pose graph finish\nyou can set 'load_previous_pose_graph' to 1 in the config file to reuse it next time\n");
             printf("program shutting down...\n");
             ros::shutdown();
@@ -598,10 +657,28 @@ int main(int argc, char **argv)
         PCL_MIN_DIST = fsSettings["pcl_min_dist"];
         PCL_MAX_DIST = fsSettings["pcl_max_dist"];
 		RESOLUTION = fsSettings["resolution"];
+        if (!fsSettings["pcl_filter_min_density"].empty())
+            PCL_FILTER_MIN_DENSITY = fsSettings["pcl_filter_min_density"];
+        if (PCL_FILTER_MIN_DENSITY < 1)
+            PCL_FILTER_MIN_DENSITY = 1;
+        if (!fsSettings["use_depth_to_map_pose_graph"].empty())
+            USE_DEPTH_TO_MAP_POSE_GRAPH = fsSettings["use_depth_to_map_pose_graph"];
+        if (!fsSettings["depth_map_weight"].empty())
+            DEPTH_MAP_WEIGHT = fsSettings["depth_map_weight"];
+        if (!fsSettings["depth_map_huber"].empty())
+            DEPTH_MAP_HUBER = fsSettings["depth_map_huber"];
+        if (!fsSettings["depth_map_min_edges"].empty())
+            DEPTH_MAP_MIN_EDGES = fsSettings["depth_map_min_edges"];
+        if (!fsSettings["depth_map_max_edges_per_frame"].empty())
+            DEPTH_MAP_MAX_EDGES_PER_FRAME = fsSettings["depth_map_max_edges_per_frame"];
+        ROS_INFO("depth-to-map pose graph: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d",
+                 USE_DEPTH_TO_MAP_POSE_GRAPH, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
+                 DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME);
         //OctreePointCloudDensity has no ::Ptr
-		posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
+        posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
-        posegraph.save_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
+        posegraph.color_cloud = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>());
+        posegraph.save_cloud = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>());
 		posegraph.octree->setInputCloud(posegraph.cloud);
         posegraph.octree->addPointsFromInputCloud();
 		// in pcl 1.8.0+, need to set bbox (isVoxelOccupiedAtPoint will check bbox)
@@ -617,9 +694,22 @@ int main(int argc, char **argv)
 
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["depth_topic"] >> DEPTH_TOPIC;
+        std::string image_topic_override;
+        if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+        {
+            IMAGE_TOPIC = image_topic_override;
+            ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+        }
+        std::string depth_topic_override;
+        if (n.getParam("depth_topic", depth_topic_override) && !depth_topic_override.empty())
+        {
+            DEPTH_TOPIC = depth_topic_override;
+            ROS_INFO_STREAM("Override depth_topic: " << DEPTH_TOPIC);
+        }
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
         fsSettings["output_path"] >> OUTPUT_PATH;
         PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");
+        posegraph.setVoxbloxOutputDirectory(joinPath(parentPath(OUTPUT_PATH), "voxblox"));
         VINS_RESULT_PATH = OUTPUT_PATH;
         fsSettings["save_image"] >> DEBUG_IMAGE;
 
@@ -642,6 +732,7 @@ int main(int argc, char **argv)
             printf("load pose graph\n");
             m_process.lock();
             posegraph.loadPoseGraph();
+            posegraph.loadVoxbloxMap();
             m_process.unlock();
             printf("load pose graph finish\n");
             load_flag = 1;
@@ -689,6 +780,7 @@ int main(int argc, char **argv)
     //not used
     pub_vio_path = n.advertise<nav_msgs::Path>("no_loop_path", 1000);
     pub_match_points = n.advertise<sensor_msgs::PointCloud>("match_points", 100);
+    ros::ServiceServer save_map_service = n.advertiseService("save_map", saveMapService);
 
     std::thread measurement_process;
     std::thread keyboard_command_process;

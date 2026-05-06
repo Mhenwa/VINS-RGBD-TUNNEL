@@ -12,7 +12,8 @@ static void reduceVector(vector<Derived> &v, vector<uchar> status)
 
 // create keyframe online
 KeyFrame::KeyFrame(double _time_stamp, int _index, Vector3d &_vio_T_w_i, Matrix3d &_vio_R_w_i, cv::Mat &_image,
-		           vector<cv::Point3f> &_point_3d_depth, vector<cv::Point3f> &_point_3d, vector<cv::Point2f> &_point_2d_uv,
+		           vector<cv::Point3f> &_point_3d_depth, vector<cv::Vec3b> &_point_3d_depth_color,
+                   vector<cv::Point3f> &_point_3d, vector<cv::Point2f> &_point_2d_uv,
 		           vector<cv::Point2f> &_point_2d_norm, vector<double> &_point_id, int _sequence)
 {
 	time_stamp = _time_stamp;
@@ -29,6 +30,9 @@ KeyFrame::KeyFrame(double _time_stamp, int _index, Vector3d &_vio_T_w_i, Matrix3
 	point_2d_uv = _point_2d_uv;
 	point_2d_norm = _point_2d_norm;
 	point_3d_depth = _point_3d_depth;
+	point_3d_depth_raw = _point_3d_depth;
+	point_3d_depth_color = _point_3d_depth_color;
+	point_3d_depth_color_raw = _point_3d_depth_color;
 	point_id = _point_id;
 	has_loop = false;
 	loop_index = -1;
@@ -610,5 +614,3 @@ BriefExtractor::BriefExtractor(const std::string &pattern_file)
 
   m_brief.importPairs(x1, y1, x2, y2);
 }
-
-

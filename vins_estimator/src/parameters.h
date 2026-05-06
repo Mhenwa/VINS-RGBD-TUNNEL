@@ -37,6 +37,13 @@ extern double TR;
 extern int ESTIMATE_TD;
 extern int ROLLING_SHUTTER;
 extern double ROW, COL;
+extern int USE_DEPTH_TO_MAP;
+extern int DEPTH_MAP_REBUILD_EACH_ITERATION;
+extern double DEPTH_MAP_WEIGHT;
+extern double DEPTH_MAP_HUBER;
+extern int DEPTH_MAP_MIN_EDGES;
+extern int DEPTH_MAP_MAX_EDGES_PER_FRAME;
+extern double DEPTH_CLOUD_SYNC_TOL;
 
 
 void readParameters(ros::NodeHandle &n);

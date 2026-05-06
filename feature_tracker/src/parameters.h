@@ -23,5 +23,12 @@ extern int STEREO_TRACK;
 extern int EQUALIZE;
 extern int FISHEYE;
 extern bool PUB_THIS_FRAME;
+extern int PCL_DIST;
+extern int U_BOUNDARY;
+extern int D_BOUNDARY;
+extern int L_BOUNDARY;
+extern int R_BOUNDARY;
+extern float PCL_MIN_DIST;
+extern float PCL_MAX_DIST;
 
 void readParameters(ros::NodeHandle &n);
