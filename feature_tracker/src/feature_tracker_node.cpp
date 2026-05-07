@@ -305,12 +305,12 @@ int main(int argc, char **argv)
     }
     //ref: http://docs.ros.org/api/message_filters/html/c++/classmessage__filters_1_1TimeSynchronizer.html#a9e58750270e40a2314dd91632a9570a6
     //     https://blog.csdn.net/zyh821351004/article/details/47758433
-    message_filters::Subscriber<sensor_msgs::Image> sub_image(n, IMAGE_TOPIC, 1);
-    message_filters::Subscriber<sensor_msgs::Image> sub_depth(n, DEPTH_TOPIC, 1);
+    message_filters::Subscriber<sensor_msgs::Image> sub_image(n, IMAGE_TOPIC, 1000);
+    message_filters::Subscriber<sensor_msgs::Image> sub_depth(n, DEPTH_TOPIC, 1000);
 //    message_filters::TimeSynchronizer<sensor_msgs::Image, sensor_msgs::Image> sync(sub_image, sub_depth, 100);
     // use ApproximateTime to fit fisheye camera
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image,sensor_msgs::Image> syncPolicy;
-    message_filters::Synchronizer<syncPolicy> sync(syncPolicy(10), sub_image, sub_depth);
+    message_filters::Synchronizer<syncPolicy> sync(syncPolicy(1000), sub_image, sub_depth);
     sync.registerCallback(boost::bind(&img_callback, _1, _2));
 
     //有图像发布到IMAGE_TOPIC，执行img_callback     100: queue size
