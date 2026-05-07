@@ -9,6 +9,12 @@ extern double DEPTH_MAP_WEIGHT;
 extern double DEPTH_MAP_HUBER;
 extern int DEPTH_MAP_MIN_EDGES;
 extern int DEPTH_MAP_MAX_EDGES_PER_FRAME;
+extern int DEPTH_MAP_NEIGHBOR_COUNT;
+extern double DEPTH_MAP_MAX_NEIGHBOR_DIST;
+extern double DEPTH_MAP_PLANE_MAX_DIST;
+extern double DEPTH_MAP_MIN_SCALE;
+extern int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES;
+extern int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL;
 extern Eigen::Matrix<double, 3, 1> ti_d;
 extern Eigen::Matrix<double, 3, 3> qi_d;
 
@@ -75,14 +81,19 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
     if (!USE_DEPTH_TO_MAP_POSE_GRAPH || keyframes.size() < 2)
         return edges;
 
-    const int max_edges = std::max(1, DEPTH_MAP_MAX_EDGES_PER_FRAME);
-    const int target = static_cast<int>(keyframes.size()) - 1;
-    if (target <= 0)
+    const int target_count = std::min<int>(std::max(1, DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES),
+                                           static_cast<int>(keyframes.size()) - 1);
+    const int max_edges_per_target = std::max(1, DEPTH_MAP_MAX_EDGES_PER_FRAME / target_count);
+    const int first_target = static_cast<int>(keyframes.size()) - target_count;
+    const int neighbor_count = std::max(3, DEPTH_MAP_NEIGHBOR_COUNT);
+    const double max_neighbor_sq_dist = DEPTH_MAP_MAX_NEIGHBOR_DIST * DEPTH_MAP_MAX_NEIGHBOR_DIST;
+    if (first_target <= 0)
         return edges;
+    for (int target = first_target; target < static_cast<int>(keyframes.size()); ++target)
     {
         const std::vector<cv::Point3f> &target_points = keyframes[target]->point_3d_depth_raw;
         if (target_points.empty())
-            return edges;
+            continue;
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
         for (int frame = 0; frame < target; frame++)
@@ -100,7 +111,7 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
             }
         }
         if (static_cast<int>(map_cloud->size()) < DEPTH_MAP_MIN_EDGES)
-            return edges;
+            continue;
 
         pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
         kdtree.setInputCloud(map_cloud);
@@ -108,18 +119,18 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
         Vector3d target_P_w_i(t_array[target][0], t_array[target][1], t_array[target][2]);
 
         std::vector<PoseGraphDepthMapEdge> frame_edges;
-        frame_edges.reserve(std::min<int>(target_points.size(), max_edges));
-        int stride = std::max(1, static_cast<int>(target_points.size()) / max_edges);
-        std::vector<int> indices(5);
-        std::vector<float> sq_distances(5);
-        for (int idx = 0; idx < static_cast<int>(target_points.size()) && static_cast<int>(frame_edges.size()) < max_edges; idx += stride)
+        frame_edges.reserve(std::min<int>(target_points.size(), max_edges_per_target));
+        int stride = std::max(1, static_cast<int>(target_points.size()) / max_edges_per_target);
+        std::vector<int> indices(neighbor_count);
+        std::vector<float> sq_distances(neighbor_count);
+        for (int idx = 0; idx < static_cast<int>(target_points.size()) && static_cast<int>(frame_edges.size()) < max_edges_per_target; idx += stride)
         {
             Vector3d point_c(target_points[idx].x, target_points[idx].y, target_points[idx].z);
             Vector3d point_w = transformDepthPoint(point_c, target_R_w_i, target_P_w_i);
             pcl::PointXYZ query(point_w.x(), point_w.y(), point_w.z());
-            if (kdtree.nearestKSearch(query, 5, indices, sq_distances) != 5)
+            if (kdtree.nearestKSearch(query, neighbor_count, indices, sq_distances) != neighbor_count)
                 continue;
-            if (sq_distances[4] > 1.0)
+            if (sq_distances.back() > max_neighbor_sq_dist)
                 continue;
 
             Vector4d plane;
@@ -131,7 +142,7 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
             {
                 const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
                 double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
-                if (std::abs(plane_distance) > 0.2)
+                if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
                 {
                     valid_plane = false;
                     break;
@@ -145,7 +156,7 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
             if (range2 < 1e-6)
                 continue;
             double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
-            if (scale <= 0.1)
+            if (scale <= DEPTH_MAP_MIN_SCALE)
                 continue;
 
             PoseGraphDepthMapEdge edge;
@@ -234,6 +245,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     cur_kf->index = global_index;
     global_index++;
 	int loop_index = -1;
+    bool queue_pose_optimization = false;
 	// always true
     if (flag_detect_loop)
     {
@@ -295,9 +307,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
                 }
                 sequence_loop[cur_kf->sequence] = 1;
             }
-            m_optimize_buf.lock();
-            optimize_buf.push(cur_kf->index);
-            m_optimize_buf.unlock();
+            queue_pose_optimization = true;
         }
 	}
 	m_keyframelist.lock();
@@ -428,6 +438,18 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     pub_octree.publish(tmp_pcl);
 	m_keyframelist.unlock();
 
+    if (USE_DEPTH_TO_MAP_POSE_GRAPH && DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL > 0 &&
+        cur_kf->index > 0 && cur_kf->index % DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL == 0)
+    {
+        queue_pose_optimization = true;
+    }
+    if (queue_pose_optimization)
+    {
+        m_optimize_buf.lock();
+        optimize_buf.push(cur_kf->index);
+        m_optimize_buf.unlock();
+    }
+
 }
 
 void PoseGraph::setVoxbloxOutputDirectory(const std::string &output_dir)
@@ -457,6 +479,7 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     cur_kf->index = global_index;
     global_index++;
     int loop_index = -1;
+    bool queue_pose_optimization = false;
     if (flag_detect_loop)
        loop_index = detectLoop(cur_kf, cur_kf->index);
     else
@@ -471,9 +494,7 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
         {
             if (earliest_loop_index > loop_index || earliest_loop_index == -1)
                 earliest_loop_index = loop_index;
-            m_optimize_buf.lock();
-            optimize_buf.push(cur_kf->index);
-            m_optimize_buf.unlock();
+            queue_pose_optimization = true;
         }
     }
     m_keyframelist.lock();
@@ -526,6 +547,12 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     keyframelist.push_back(cur_kf);
     //publish();
     m_keyframelist.unlock();
+    if (queue_pose_optimization)
+    {
+        m_optimize_buf.lock();
+        optimize_buf.push(cur_kf->index);
+        m_optimize_buf.unlock();
+    }
 }
 
 KeyFrame* PoseGraph::getKeyFrame(int index)
@@ -669,6 +696,15 @@ void PoseGraph::optimize4DoF()
             TicToc tmp_t;
             m_keyframelist.lock();
             KeyFrame* cur_kf = getKeyFrame(cur_index);
+            if (cur_kf == NULL)
+            {
+                m_keyframelist.unlock();
+                std::chrono::milliseconds dura(2000);
+                std::this_thread::sleep_for(dura);
+                continue;
+            }
+            if (first_looped_index < 0)
+                first_looped_index = 0;
 
             int max_length = cur_index + 1;
 

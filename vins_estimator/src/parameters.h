@@ -43,6 +43,10 @@ extern double DEPTH_MAP_WEIGHT;
 extern double DEPTH_MAP_HUBER;
 extern int DEPTH_MAP_MIN_EDGES;
 extern int DEPTH_MAP_MAX_EDGES_PER_FRAME;
+extern int DEPTH_MAP_NEIGHBOR_COUNT;
+extern double DEPTH_MAP_MAX_NEIGHBOR_DIST;
+extern double DEPTH_MAP_PLANE_MAX_DIST;
+extern double DEPTH_MAP_MIN_SCALE;
 extern double DEPTH_CLOUD_SYNC_TOL;
 
 

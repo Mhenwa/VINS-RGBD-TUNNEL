@@ -28,6 +28,10 @@ double DEPTH_MAP_WEIGHT = 100.0;
 double DEPTH_MAP_HUBER = 1.0;
 int DEPTH_MAP_MIN_EDGES = 50;
 int DEPTH_MAP_MAX_EDGES_PER_FRAME = 800;
+int DEPTH_MAP_NEIGHBOR_COUNT = 5;
+double DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+double DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+double DEPTH_MAP_MIN_SCALE = 0.1;
 double DEPTH_CLOUD_SYNC_TOL = 0.02;
 
 template <typename T>
@@ -44,6 +48,17 @@ T readParam(ros::NodeHandle &n, std::string name)
         n.shutdown();
     }
     return ans;
+}
+
+template <typename T>
+void readOptionalRosParam(ros::NodeHandle &n, const std::string &name, T &value)
+{
+    T override_value;
+    if (n.getParam(name, override_value))
+    {
+        value = override_value;
+        ROS_INFO_STREAM("Override " << name << ": " << value);
+    }
 }
 
 void readParameters(ros::NodeHandle &n)
@@ -146,13 +161,48 @@ void readParameters(ros::NodeHandle &n)
         DEPTH_MAP_MIN_EDGES = fsSettings["depth_map_min_edges"];
     if (!fsSettings["depth_map_max_edges_per_frame"].empty())
         DEPTH_MAP_MAX_EDGES_PER_FRAME = fsSettings["depth_map_max_edges_per_frame"];
+    if (!fsSettings["depth_map_neighbor_count"].empty())
+        DEPTH_MAP_NEIGHBOR_COUNT = fsSettings["depth_map_neighbor_count"];
+    if (!fsSettings["depth_map_max_neighbor_dist"].empty())
+        DEPTH_MAP_MAX_NEIGHBOR_DIST = fsSettings["depth_map_max_neighbor_dist"];
+    if (!fsSettings["depth_map_plane_max_dist"].empty())
+        DEPTH_MAP_PLANE_MAX_DIST = fsSettings["depth_map_plane_max_dist"];
+    if (!fsSettings["depth_map_min_scale"].empty())
+        DEPTH_MAP_MIN_SCALE = fsSettings["depth_map_min_scale"];
     if (!fsSettings["depth_map_rebuild_each_iteration"].empty())
         DEPTH_MAP_REBUILD_EACH_ITERATION = fsSettings["depth_map_rebuild_each_iteration"];
     if (!fsSettings["depth_cloud_sync_tol"].empty())
         DEPTH_CLOUD_SYNC_TOL = fsSettings["depth_cloud_sync_tol"];
-    ROS_INFO("depth-to-map vio: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d sync_tol: %.3f",
+
+    readOptionalRosParam(n, "use_depth_to_map", USE_DEPTH_TO_MAP);
+    readOptionalRosParam(n, "depth_map_weight", DEPTH_MAP_WEIGHT);
+    readOptionalRosParam(n, "depth_map_huber", DEPTH_MAP_HUBER);
+    readOptionalRosParam(n, "depth_map_min_edges", DEPTH_MAP_MIN_EDGES);
+    readOptionalRosParam(n, "depth_map_max_edges_per_frame", DEPTH_MAP_MAX_EDGES_PER_FRAME);
+    readOptionalRosParam(n, "depth_map_neighbor_count", DEPTH_MAP_NEIGHBOR_COUNT);
+    readOptionalRosParam(n, "depth_map_max_neighbor_dist", DEPTH_MAP_MAX_NEIGHBOR_DIST);
+    readOptionalRosParam(n, "depth_map_plane_max_dist", DEPTH_MAP_PLANE_MAX_DIST);
+    readOptionalRosParam(n, "depth_map_min_scale", DEPTH_MAP_MIN_SCALE);
+    readOptionalRosParam(n, "depth_cloud_sync_tol", DEPTH_CLOUD_SYNC_TOL);
+
+    if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
+        DEPTH_MAP_NEIGHBOR_COUNT = 3;
+    if (DEPTH_MAP_MAX_EDGES_PER_FRAME < 1)
+        DEPTH_MAP_MAX_EDGES_PER_FRAME = 1;
+    if (DEPTH_MAP_MIN_EDGES < 1)
+        DEPTH_MAP_MIN_EDGES = 1;
+    if (DEPTH_MAP_MAX_NEIGHBOR_DIST <= 0.0)
+        DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+    if (DEPTH_MAP_PLANE_MAX_DIST <= 0.0)
+        DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+    if (DEPTH_MAP_MIN_SCALE < 0.0)
+        DEPTH_MAP_MIN_SCALE = 0.0;
+
+    ROS_INFO("depth-to-map vio: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f sync_tol: %.3f",
              USE_DEPTH_TO_MAP, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
-             DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME, DEPTH_CLOUD_SYNC_TOL);
+             DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME,
+             DEPTH_MAP_NEIGHBOR_COUNT, DEPTH_MAP_MAX_NEIGHBOR_DIST,
+             DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE, DEPTH_CLOUD_SYNC_TOL);
     
     fsSettings.release();
 }

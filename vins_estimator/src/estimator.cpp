@@ -80,8 +80,10 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
     const int max_edges = std::max(1, DEPTH_MAP_MAX_EDGES_PER_FRAME);
     const int stride = std::max(1, static_cast<int>(target_cloud.size()) / max_edges);
 
-    std::vector<int> indices(5);
-    std::vector<float> sq_distances(5);
+    const int neighbor_count = std::max(3, DEPTH_MAP_NEIGHBOR_COUNT);
+    const double max_neighbor_sq_dist = DEPTH_MAP_MAX_NEIGHBOR_DIST * DEPTH_MAP_MAX_NEIGHBOR_DIST;
+    std::vector<int> indices(neighbor_count);
+    std::vector<float> sq_distances(neighbor_count);
     edges.reserve(std::min<int>(target_cloud.size(), max_edges));
     for (int idx = 0; idx < static_cast<int>(target_cloud.size()) && static_cast<int>(edges.size()) < max_edges; idx += stride)
     {
@@ -89,9 +91,9 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
         Vector3d point_w = transformCameraPoint(point_c, estimator.Rs[target], estimator.Ps[target],
                                                 estimator.ric[0], estimator.tic[0]);
         pcl::PointXYZ query(point_w.x(), point_w.y(), point_w.z());
-        if (kdtree.nearestKSearch(query, 5, indices, sq_distances) != 5)
+        if (kdtree.nearestKSearch(query, neighbor_count, indices, sq_distances) != neighbor_count)
             continue;
-        if (sq_distances[4] > 1.0)
+        if (sq_distances.back() > max_neighbor_sq_dist)
             continue;
 
         Vector4d plane;
@@ -103,7 +105,7 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
         {
             const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
             double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
-            if (std::abs(plane_distance) > 0.2)
+            if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
             {
                 valid_plane = false;
                 break;
@@ -117,7 +119,7 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
         if (range2 < 1e-6)
             continue;
         double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
-        if (scale <= 0.1)
+        if (scale <= DEPTH_MAP_MIN_SCALE)
             continue;
 
         DepthMapEdge edge;
