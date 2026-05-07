@@ -115,9 +115,42 @@ void FeatureTracker::readImage(const cv::Mat &_img, const cv::Mat &_depth, doubl
         vector<float> err;
         cv::calcOpticalFlowPyrLK(cur_img, forw_img, cur_pts, forw_pts, status, err, cv::Size(21, 21), 3);
 
+        int rejected_by_fb = 0;
+        int rejected_by_err = 0;
+        if (LK_FORWARD_BACKWARD_CHECK && !forw_pts.empty())
+        {
+            vector<cv::Point2f> reverse_pts;
+            vector<uchar> reverse_status;
+            vector<float> reverse_err;
+            cv::calcOpticalFlowPyrLK(forw_img, cur_img, forw_pts, reverse_pts, reverse_status, reverse_err,
+                                     cv::Size(21, 21), 3);
+            for (int i = 0; i < int(status.size()); i++)
+            {
+                if (!status[i])
+                    continue;
+                if (!reverse_status[i] || cv::norm(cur_pts[i] - reverse_pts[i]) > LK_MAX_FWD_BWD_ERROR)
+                {
+                    status[i] = 0;
+                    rejected_by_fb++;
+                    continue;
+                }
+                if (LK_MAX_TRACK_ERROR > 0.0 &&
+                    (err[i] > LK_MAX_TRACK_ERROR || reverse_err[i] > LK_MAX_TRACK_ERROR))
+                {
+                    status[i] = 0;
+                    rejected_by_err++;
+                }
+            }
+        }
+
         for (int i = 0; i < int(forw_pts.size()); i++)
             if (status[i] && !inBorder(forw_pts[i]))
                 status[i] = 0;
+        if (LK_FORWARD_BACKWARD_CHECK && (rejected_by_fb > 0 || rejected_by_err > 0))
+        {
+            ROS_DEBUG("LK quality rejected %d by fb consistency, %d by tracking error",
+                      rejected_by_fb, rejected_by_err);
+        }
         reduceVector(prev_pts, status);
         reduceVector(cur_pts, status);
         reduceVector(forw_pts, status);

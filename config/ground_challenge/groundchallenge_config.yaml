@@ -93,6 +93,9 @@ F_threshold: 1.0        # ransac threshold (pixel)
 show_track: 1           # publish tracking image as topic
 equalize: 0             # if image is too dark or light, trun on equalize to find enough features
 fisheye: 0              # if using fisheye, trun on it. A circle mask will be loaded to remove edge noisy points
+lk_forward_backward_check: 1  # reject low-light tracks that cannot be tracked back to the previous frame
+lk_max_fwd_bwd_error: 1.5     # max forward-backward optical-flow reprojection error in pixels
+lk_max_track_error: -1.0      # disabled by default; set positive to reject high LK photometric error
 
 #optimization parameters
 max_solver_time: 0.04  # max solver itration time (ms), to guarantee real time

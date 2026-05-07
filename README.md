@@ -259,6 +259,18 @@ python3 tools/run_ablation_eval.py \
 
 从这次结果看，Ground-Challenge 的 `darkroom1.bag` 上完整系统 ATE RMSE 最低；`Normal.bag` 上 Depth-to-map 单独开启最好，完整系统略差于 baseline。实时性方面，Zero-DCE++ ONNX C++ 增强节点在 CPU 上约 15-20 Hz，前端和里程计维持约 6.8-10.5 Hz。
 
+针对 `darkroom1.bag` 这类低照、低纹理场景，`groundchallenge_config.yaml` 额外开启了 LK 前后向一致性检查：
+
+- `lk_forward_backward_check: 1`
+- `lk_max_fwd_bwd_error: 1.5`
+- `lk_max_track_error: -1.0`
+
+该检查会过滤无法从当前帧稳定反跟回上一帧的光流点，减少 Zero-DCE++ 增强后伪纹理或低纹理漂移点进入 VIO 和 Depth-to-map。开启后重跑 `darkroom1/full`：
+
+| Seq | Variant | ATE RMSE m | ATE Mean m | ATE Max m | Enhanced Hz | Feature Hz | Odom Hz | Raw->Enh ms | Img->Feat ms | Img->Odom ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| darkroom1 | full + LK FB check | 0.3327 | 0.3026 | 0.6649 | 15.0004 | 10.4840 | 10.5134 | 13.2321 | 9.2473 | 33.9547 |
+
 ---
 
 
