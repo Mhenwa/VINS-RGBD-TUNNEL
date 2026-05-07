@@ -250,14 +250,16 @@ void relocalization_callback(const sensor_msgs::PointCloudConstPtr &points_msg)
 // thread: visual-inertial odometry
 void process()
 {
-    while (true)
+    while (ros::ok())
     {
         std::vector<EstimatorMeasurement> measurements;
         std::unique_lock<std::mutex> lk(m_buf);
         con.wait(lk, [&]
                  {
-            return (measurements = getMeasurements()).size() != 0;
+            return !ros::ok() || (measurements = getMeasurements()).size() != 0;
                  });
+        if (!ros::ok())
+            break;
         lk.unlock();
         m_estimator.lock();
         for (auto &measurement : measurements)
@@ -419,6 +421,9 @@ int main(int argc, char **argv)
 
     std::thread measurement_process{process};
     ros::spin();
+    con.notify_all();
+    if (measurement_process.joinable())
+        measurement_process.join();
 
     return 0;
 }
