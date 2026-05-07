@@ -33,6 +33,7 @@
 #include <pcl/octree/octree.h>
 #include <pcl/octree/octree_impl.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/kdtree/kdtree_flann.h>
 
 #define SHOW_S_EDGE false
 #define SHOW_L_EDGE false
@@ -270,4 +271,68 @@ struct FourDOFWeightError
 	double relative_yaw, pitch_i, roll_i;
 	double weight;
 
+};
+
+struct DepthToMapFourDOFError
+{
+	DepthToMapFourDOFError(const Vector3d &point_c,
+						   const Vector4d &plane,
+						   double scale,
+						   double sqrt_info,
+						   double pitch,
+						   double roll,
+						   const Matrix3d &R_i_c,
+						   const Vector3d &P_i_c)
+		: point_c(point_c), plane(plane), scale(scale), sqrt_info(sqrt_info),
+		  pitch(pitch), roll(roll), R_i_c(R_i_c), P_i_c(P_i_c)
+	{
+	}
+
+	template <typename T>
+	bool operator()(const T* const yaw_i, const T* t_i, T* residuals) const
+	{
+		T w_R_i[9];
+		YawPitchRollToRotationMatrix(yaw_i[0], T(pitch), T(roll), w_R_i);
+
+		T p_i[3];
+		p_i[0] = T(R_i_c(0, 0)) * T(point_c.x()) + T(R_i_c(0, 1)) * T(point_c.y()) +
+				 T(R_i_c(0, 2)) * T(point_c.z()) + T(P_i_c.x());
+		p_i[1] = T(R_i_c(1, 0)) * T(point_c.x()) + T(R_i_c(1, 1)) * T(point_c.y()) +
+				 T(R_i_c(1, 2)) * T(point_c.z()) + T(P_i_c.y());
+		p_i[2] = T(R_i_c(2, 0)) * T(point_c.x()) + T(R_i_c(2, 1)) * T(point_c.y()) +
+				 T(R_i_c(2, 2)) * T(point_c.z()) + T(P_i_c.z());
+
+		T p_w[3];
+		RotationMatrixRotatePoint(w_R_i, p_i, p_w);
+		p_w[0] += t_i[0];
+		p_w[1] += t_i[1];
+		p_w[2] += t_i[2];
+
+		residuals[0] = T(sqrt_info * scale) *
+					   (T(plane.x()) * p_w[0] + T(plane.y()) * p_w[1] +
+					    T(plane.z()) * p_w[2] + T(plane.w()));
+		return true;
+	}
+
+	static ceres::CostFunction* Create(const Vector3d &point_c,
+									   const Vector4d &plane,
+									   double scale,
+									   double sqrt_info,
+									   double pitch,
+									   double roll,
+									   const Matrix3d &R_i_c,
+									   const Vector3d &P_i_c)
+	{
+	  return new ceres::AutoDiffCostFunction<DepthToMapFourDOFError, 1, 1, 3>(
+		  new DepthToMapFourDOFError(point_c, plane, scale, sqrt_info, pitch, roll, R_i_c, P_i_c));
+	}
+
+	Vector3d point_c;
+	Vector4d plane;
+	double scale;
+	double sqrt_info;
+	double pitch;
+	double roll;
+	Matrix3d R_i_c;
+	Vector3d P_i_c;
 };

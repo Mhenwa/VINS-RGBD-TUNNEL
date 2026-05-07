@@ -76,6 +76,17 @@ double DENSE_DEPTH_MID_RANGE = 4.0;
 int DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME = 12000;
 int DENSE_DEPTH_PROFILE = 0;
 int AUTO_SAVE_MAP_ON_EXIT = 1;
+int USE_DEPTH_TO_MAP_POSE_GRAPH = 1;
+double DEPTH_MAP_WEIGHT = 100.0;
+double DEPTH_MAP_HUBER = 1.0;
+int DEPTH_MAP_MIN_EDGES = 50;
+int DEPTH_MAP_MAX_EDGES_PER_FRAME = 800;
+int DEPTH_MAP_NEIGHBOR_COUNT = 5;
+double DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+double DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+double DEPTH_MAP_MIN_SCALE = 0.1;
+int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 5;
+int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 10;
 
 
 camodocal::CameraPtr m_camera;
@@ -91,6 +102,17 @@ ros::Publisher pub_camera_pose_visual;
 ros::Publisher pub_key_odometrys;
 ros::Publisher pub_vio_path;
 nav_msgs::Path no_loop_path;
+
+template <typename T>
+void readOptionalRosParam(ros::NodeHandle &n, const std::string &name, T &value)
+{
+    T override_value;
+    if (n.getParam(name, override_value))
+    {
+        value = override_value;
+        ROS_INFO_STREAM("Override " << name << ": " << value);
+    }
+}
 
 std::string BRIEF_PATTERN_FILE;
 std::string POSE_GRAPH_SAVE_PATH;
@@ -846,6 +868,65 @@ int main(int argc, char **argv)
                  DENSE_DEPTH_FAR_STRIDE, DENSE_DEPTH_NEAR_RANGE, DENSE_DEPTH_MID_RANGE,
                  DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME, DENSE_DEPTH_PROFILE);
         ROS_INFO("auto save map on exit: %d", AUTO_SAVE_MAP_ON_EXIT);
+        if (!fsSettings["use_depth_to_map_pose_graph"].empty())
+            USE_DEPTH_TO_MAP_POSE_GRAPH = fsSettings["use_depth_to_map_pose_graph"];
+        if (!fsSettings["depth_map_weight"].empty())
+            DEPTH_MAP_WEIGHT = fsSettings["depth_map_weight"];
+        if (!fsSettings["depth_map_huber"].empty())
+            DEPTH_MAP_HUBER = fsSettings["depth_map_huber"];
+        if (!fsSettings["depth_map_min_edges"].empty())
+            DEPTH_MAP_MIN_EDGES = fsSettings["depth_map_min_edges"];
+        if (!fsSettings["depth_map_max_edges_per_frame"].empty())
+            DEPTH_MAP_MAX_EDGES_PER_FRAME = fsSettings["depth_map_max_edges_per_frame"];
+        if (!fsSettings["depth_map_neighbor_count"].empty())
+            DEPTH_MAP_NEIGHBOR_COUNT = fsSettings["depth_map_neighbor_count"];
+        if (!fsSettings["depth_map_max_neighbor_dist"].empty())
+            DEPTH_MAP_MAX_NEIGHBOR_DIST = fsSettings["depth_map_max_neighbor_dist"];
+        if (!fsSettings["depth_map_plane_max_dist"].empty())
+            DEPTH_MAP_PLANE_MAX_DIST = fsSettings["depth_map_plane_max_dist"];
+        if (!fsSettings["depth_map_min_scale"].empty())
+            DEPTH_MAP_MIN_SCALE = fsSettings["depth_map_min_scale"];
+        if (!fsSettings["depth_map_pose_graph_target_keyframes"].empty())
+            DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = fsSettings["depth_map_pose_graph_target_keyframes"];
+        if (!fsSettings["depth_map_pose_graph_opt_interval"].empty())
+            DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = fsSettings["depth_map_pose_graph_opt_interval"];
+
+        readOptionalRosParam(n, "use_depth_to_map_pose_graph", USE_DEPTH_TO_MAP_POSE_GRAPH);
+        readOptionalRosParam(n, "depth_map_weight", DEPTH_MAP_WEIGHT);
+        readOptionalRosParam(n, "depth_map_huber", DEPTH_MAP_HUBER);
+        readOptionalRosParam(n, "depth_map_min_edges", DEPTH_MAP_MIN_EDGES);
+        readOptionalRosParam(n, "depth_map_max_edges_per_frame", DEPTH_MAP_MAX_EDGES_PER_FRAME);
+        readOptionalRosParam(n, "depth_map_neighbor_count", DEPTH_MAP_NEIGHBOR_COUNT);
+        readOptionalRosParam(n, "depth_map_max_neighbor_dist", DEPTH_MAP_MAX_NEIGHBOR_DIST);
+        readOptionalRosParam(n, "depth_map_plane_max_dist", DEPTH_MAP_PLANE_MAX_DIST);
+        readOptionalRosParam(n, "depth_map_min_scale", DEPTH_MAP_MIN_SCALE);
+        readOptionalRosParam(n, "depth_map_pose_graph_target_keyframes", DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES);
+        readOptionalRosParam(n, "depth_map_pose_graph_opt_interval", DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL);
+
+        if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
+            DEPTH_MAP_NEIGHBOR_COUNT = 3;
+        if (DEPTH_MAP_MAX_EDGES_PER_FRAME < 1)
+            DEPTH_MAP_MAX_EDGES_PER_FRAME = 1;
+        if (DEPTH_MAP_MIN_EDGES < 1)
+            DEPTH_MAP_MIN_EDGES = 1;
+        if (DEPTH_MAP_MAX_NEIGHBOR_DIST <= 0.0)
+            DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+        if (DEPTH_MAP_PLANE_MAX_DIST <= 0.0)
+            DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+        if (DEPTH_MAP_MIN_SCALE < 0.0)
+            DEPTH_MAP_MIN_SCALE = 0.0;
+        if (DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES < 1)
+            DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 1;
+        if (DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL < 0)
+            DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 0;
+
+        ROS_INFO("depth-to-map pose graph: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f target_kfs: %d opt_interval: %d",
+                 USE_DEPTH_TO_MAP_POSE_GRAPH, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
+                 DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME,
+                 DEPTH_MAP_NEIGHBOR_COUNT, DEPTH_MAP_MAX_NEIGHBOR_DIST,
+                 DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE,
+                 DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES,
+                 DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL);
         //OctreePointCloudDensity has no ::Ptr
         posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
@@ -866,6 +947,18 @@ int main(int argc, char **argv)
 
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["depth_topic"] >> DEPTH_TOPIC;
+        std::string image_topic_override;
+        if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+        {
+            IMAGE_TOPIC = image_topic_override;
+            ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+        }
+        std::string depth_topic_override;
+        if (n.getParam("depth_topic", depth_topic_override) && !depth_topic_override.empty())
+        {
+            DEPTH_TOPIC = depth_topic_override;
+            ROS_INFO_STREAM("Override depth_topic: " << DEPTH_TOPIC);
+        }
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
         fsSettings["output_path"] >> OUTPUT_PATH;
         PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");

@@ -1,4 +1,141 @@
 #include "estimator.h"
+#include <algorithm>
+#include <pcl/kdtree/kdtree_flann.h>
+
+namespace
+{
+struct DepthMapEdge
+{
+    int frame_index;
+    Vector3d point_c;
+    Vector4d plane;
+    double scale;
+    double abs_distance;
+};
+
+bool fitPlane(const std::vector<int> &indices,
+              const pcl::PointCloud<pcl::PointXYZ>::Ptr &map_cloud,
+              Vector4d &plane)
+{
+    Vector3d centroid = Vector3d::Zero();
+    for (int idx : indices)
+        centroid += Vector3d(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+    centroid /= static_cast<double>(indices.size());
+
+    Matrix3d covariance = Matrix3d::Zero();
+    for (int idx : indices)
+    {
+        Vector3d point(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+        Vector3d delta = point - centroid;
+        covariance += delta * delta.transpose();
+    }
+
+    Eigen::SelfAdjointEigenSolver<Matrix3d> solver(covariance);
+    if (solver.info() != Eigen::Success)
+        return false;
+
+    Vector3d normal = solver.eigenvectors().col(0).normalized();
+    plane.head<3>() = normal;
+    plane(3) = -normal.dot(centroid);
+    return true;
+}
+
+Vector3d transformCameraPoint(const Vector3d &point_c,
+                              const Matrix3d &R_w_i,
+                              const Vector3d &P_w_i,
+                              const Matrix3d &R_i_c,
+                              const Vector3d &P_i_c)
+{
+    return R_w_i * (R_i_c * point_c + P_i_c) + P_w_i;
+}
+
+std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
+{
+    std::vector<DepthMapEdge> edges;
+    if (!USE_DEPTH_TO_MAP || estimator.solver_flag != Estimator::NON_LINEAR)
+        return edges;
+
+    const int target = estimator.frame_count;
+    if (target <= 0 || target > WINDOW_SIZE || estimator.depth_clouds[target].empty())
+        return edges;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    for (int frame = 0; frame < target; frame++)
+    {
+        for (const Vector3d &point_c : estimator.depth_clouds[frame])
+        {
+            Vector3d point_w = transformCameraPoint(point_c, estimator.Rs[frame], estimator.Ps[frame],
+                                                    estimator.ric[0], estimator.tic[0]);
+            map_cloud->push_back(pcl::PointXYZ(point_w.x(), point_w.y(), point_w.z()));
+        }
+    }
+
+    if (static_cast<int>(map_cloud->size()) < DEPTH_MAP_MIN_EDGES)
+        return edges;
+
+    pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+    kdtree.setInputCloud(map_cloud);
+
+    const std::vector<Vector3d> &target_cloud = estimator.depth_clouds[target];
+    const int max_edges = std::max(1, DEPTH_MAP_MAX_EDGES_PER_FRAME);
+    const int stride = std::max(1, static_cast<int>(target_cloud.size()) / max_edges);
+
+    const int neighbor_count = std::max(3, DEPTH_MAP_NEIGHBOR_COUNT);
+    const double max_neighbor_sq_dist = DEPTH_MAP_MAX_NEIGHBOR_DIST * DEPTH_MAP_MAX_NEIGHBOR_DIST;
+    std::vector<int> indices(neighbor_count);
+    std::vector<float> sq_distances(neighbor_count);
+    edges.reserve(std::min<int>(target_cloud.size(), max_edges));
+    for (int idx = 0; idx < static_cast<int>(target_cloud.size()) && static_cast<int>(edges.size()) < max_edges; idx += stride)
+    {
+        const Vector3d &point_c = target_cloud[idx];
+        Vector3d point_w = transformCameraPoint(point_c, estimator.Rs[target], estimator.Ps[target],
+                                                estimator.ric[0], estimator.tic[0]);
+        pcl::PointXYZ query(point_w.x(), point_w.y(), point_w.z());
+        if (kdtree.nearestKSearch(query, neighbor_count, indices, sq_distances) != neighbor_count)
+            continue;
+        if (sq_distances.back() > max_neighbor_sq_dist)
+            continue;
+
+        Vector4d plane;
+        if (!fitPlane(indices, map_cloud, plane))
+            continue;
+
+        bool valid_plane = true;
+        for (int nearest_idx : indices)
+        {
+            const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
+            double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
+            if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
+            {
+                valid_plane = false;
+                break;
+            }
+        }
+        if (!valid_plane)
+            continue;
+
+        double distance = plane.head<3>().dot(point_w) + plane(3);
+        double range2 = point_c.squaredNorm();
+        if (range2 < 1e-6)
+            continue;
+        double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
+        if (scale <= DEPTH_MAP_MIN_SCALE)
+            continue;
+
+        DepthMapEdge edge;
+        edge.frame_index = target;
+        edge.point_c = point_c;
+        edge.plane = plane;
+        edge.scale = scale;
+        edge.abs_distance = std::abs(distance);
+        edges.push_back(edge);
+    }
+
+    if (static_cast<int>(edges.size()) < DEPTH_MAP_MIN_EDGES)
+        edges.clear();
+    return edges;
+}
+}
 
 Estimator::Estimator(): f_manager{Rs}
 {
@@ -31,6 +168,7 @@ void Estimator::clearState()
         dt_buf[i].clear();
         linear_acceleration_buf[i].clear();
         angular_velocity_buf[i].clear();
+        depth_clouds[i].clear();
 
         if (pre_integrations[i] != nullptr)
             delete pre_integrations[i];
@@ -115,10 +253,13 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const
     gyr_0 = angular_velocity;
 }
 
-void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 8, 1>>>> &image, const std_msgs::Header &header)
+void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 8, 1>>>> &image,
+                             const std_msgs::Header &header,
+                             const vector<Vector3d> &depth_cloud)
 {
     ROS_DEBUG("new image coming ------------------------------------------");
     ROS_DEBUG("Adding feature points %lu", image.size());
+    depth_clouds[frame_count] = depth_cloud;
     // FeaturePerFrame
     // FeaturePerId
     // feature
@@ -873,6 +1014,23 @@ void Estimator::optimization()
     }
 
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
+    std::vector<DepthMapEdge> depth_map_edges = buildVioDepthMapEdges(*this);
+    if (!depth_map_edges.empty())
+    {
+        ceres::LossFunction *depth_loss = DEPTH_MAP_HUBER > 0 ? new ceres::HuberLoss(DEPTH_MAP_HUBER) : NULL;
+        double avg_abs_distance = 0.0;
+        for (const DepthMapEdge &edge : depth_map_edges)
+        {
+            ceres::CostFunction *depth_factor = DepthToMapFactor::Create(edge.point_c, edge.plane,
+                                                                          edge.scale, DEPTH_MAP_WEIGHT);
+            problem.AddResidualBlock(depth_factor, depth_loss,
+                                     para_Pose[edge.frame_index], para_Ex_Pose[0]);
+            avg_abs_distance += edge.abs_distance;
+        }
+        avg_abs_distance /= static_cast<double>(depth_map_edges.size());
+        ROS_INFO_THROTTLE(1.0, "vio depth-to-map edges: %lu avg_abs_dist: %.4f",
+                          depth_map_edges.size(), avg_abs_distance);
+    }
     ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
 
     if(relocalization_info)
@@ -1130,6 +1288,7 @@ void Estimator::slideWindow()
                 dt_buf[i].swap(dt_buf[i + 1]);
                 linear_acceleration_buf[i].swap(linear_acceleration_buf[i + 1]);
                 angular_velocity_buf[i].swap(angular_velocity_buf[i + 1]);
+                depth_clouds[i].swap(depth_clouds[i + 1]);
 
                 Headers[i] = Headers[i + 1];
                 Ps[i].swap(Ps[i + 1]);
@@ -1150,6 +1309,7 @@ void Estimator::slideWindow()
             dt_buf[WINDOW_SIZE].clear();
             linear_acceleration_buf[WINDOW_SIZE].clear();
             angular_velocity_buf[WINDOW_SIZE].clear();
+            depth_clouds[WINDOW_SIZE].clear();
 
             if (true || solver_flag == INITIAL)
             {
@@ -1193,6 +1353,7 @@ void Estimator::slideWindow()
             Rs[frame_count - 1] = Rs[frame_count];
             Bas[frame_count - 1] = Bas[frame_count];
             Bgs[frame_count - 1] = Bgs[frame_count];
+            depth_clouds[frame_count - 1] = depth_clouds[frame_count];
 
             delete pre_integrations[WINDOW_SIZE];
             pre_integrations[WINDOW_SIZE] = new IntegrationBase{acc_0, gyr_0, Bas[WINDOW_SIZE], Bgs[WINDOW_SIZE]};
@@ -1200,6 +1361,7 @@ void Estimator::slideWindow()
             dt_buf[WINDOW_SIZE].clear();
             linear_acceleration_buf[WINDOW_SIZE].clear();
             angular_velocity_buf[WINDOW_SIZE].clear();
+            depth_clouds[WINDOW_SIZE].clear();
 
             slideWindowNew();
         }

@@ -3,6 +3,19 @@
     <arg name="depth_config_path" default = "$(find feature_tracker)/../config/realsense/realsense_depth_config.yaml" />
     <arg name="voxblox_config_path" default = "$(find feature_tracker)/../config/voxblox/voxblox_config.yaml" />
 	  <arg name="vins_path" default = "$(find feature_tracker)/../config/../" />
+    <arg name="use_depth_to_map" default="0" />
+    <arg name="use_depth_to_map_pose_graph" default="0" />
+    <arg name="depth_map_weight" default="100.0" />
+    <arg name="depth_map_huber" default="1.0" />
+    <arg name="depth_map_min_edges" default="50" />
+    <arg name="depth_map_max_edges_per_frame" default="800" />
+    <arg name="depth_map_neighbor_count" default="5" />
+    <arg name="depth_map_max_neighbor_dist" default="1.0" />
+    <arg name="depth_map_plane_max_dist" default="0.2" />
+    <arg name="depth_map_min_scale" default="0.1" />
+    <arg name="depth_map_pose_graph_target_keyframes" default="5" />
+    <arg name="depth_map_pose_graph_opt_interval" default="10" />
+    <arg name="depth_cloud_sync_tol" default="0.02" />
     
     <node name="feature_tracker" pkg="feature_tracker" type="feature_tracker" output="screen">
         <param name="config_file" type="string" value="$(arg config_path)" />
@@ -13,6 +26,16 @@
     <node name="vins_estimator" pkg="vins_estimator" type="vins_estimator" output="screen">
        <param name="config_file" type="string" value="$(arg config_path)" />
        <param name="vins_folder" type="string" value="$(arg vins_path)" />
+       <param name="use_depth_to_map" type="int" value="$(arg use_depth_to_map)" />
+       <param name="depth_map_weight" type="double" value="$(arg depth_map_weight)" />
+       <param name="depth_map_huber" type="double" value="$(arg depth_map_huber)" />
+       <param name="depth_map_min_edges" type="int" value="$(arg depth_map_min_edges)" />
+       <param name="depth_map_max_edges_per_frame" type="int" value="$(arg depth_map_max_edges_per_frame)" />
+       <param name="depth_map_neighbor_count" type="int" value="$(arg depth_map_neighbor_count)" />
+       <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
+       <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
+       <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+       <param name="depth_cloud_sync_tol" type="double" value="$(arg depth_cloud_sync_tol)" />
     </node>
 
     <node name="pose_graph" pkg="pose_graph" type="pose_graph" output="screen">
@@ -22,6 +45,17 @@
         <param name="visualization_shift_y" type="int" value="0" />
         <param name="skip_cnt" type="int" value="0" />
         <param name="skip_dis" type="double" value="0" />
+        <param name="use_depth_to_map_pose_graph" type="int" value="$(arg use_depth_to_map_pose_graph)" />
+        <param name="depth_map_weight" type="double" value="$(arg depth_map_weight)" />
+        <param name="depth_map_huber" type="double" value="$(arg depth_map_huber)" />
+        <param name="depth_map_min_edges" type="int" value="$(arg depth_map_min_edges)" />
+        <param name="depth_map_max_edges_per_frame" type="int" value="$(arg depth_map_max_edges_per_frame)" />
+        <param name="depth_map_neighbor_count" type="int" value="$(arg depth_map_neighbor_count)" />
+        <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
+        <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
+        <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+        <param name="depth_map_pose_graph_target_keyframes" type="int" value="$(arg depth_map_pose_graph_target_keyframes)" />
+        <param name="depth_map_pose_graph_opt_interval" type="int" value="$(arg depth_map_pose_graph_opt_interval)" />
     </node>
 
 </launch>

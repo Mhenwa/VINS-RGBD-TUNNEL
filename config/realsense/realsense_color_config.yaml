@@ -30,6 +30,22 @@ dense_depth_mid_range: 4.0
 dense_depth_max_points_per_keyframe: 12000
 dense_depth_profile: 0
 
+# depth-to-map residual
+use_depth_to_map: 1
+use_depth_to_map_pose_graph: 1
+depth_map_weight: 100.0
+depth_map_huber: 1.0
+depth_map_min_edges: 50
+depth_map_max_edges_per_frame: 800
+depth_map_neighbor_count: 5
+depth_map_max_neighbor_dist: 1.0
+depth_map_plane_max_dist: 0.2
+depth_map_min_scale: 0.1
+depth_map_pose_graph_target_keyframes: 5
+depth_map_pose_graph_opt_interval: 10
+depth_map_rebuild_each_iteration: 1
+depth_cloud_sync_tol: 0.02
+
 #camera calibration
 model_type: PINHOLE
 camera_name: camera

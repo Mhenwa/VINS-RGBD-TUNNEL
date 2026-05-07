@@ -18,6 +18,13 @@ int COL;
 int FOCAL_LENGTH;
 int FISHEYE;
 bool PUB_THIS_FRAME;
+int PCL_DIST;
+int U_BOUNDARY;
+int D_BOUNDARY;
+int L_BOUNDARY;
+int R_BOUNDARY;
+float PCL_MIN_DIST;
+float PCL_MAX_DIST;
 
 template <typename T>
 T readParam(ros::NodeHandle &n, std::string name)
@@ -48,6 +55,18 @@ void readParameters(ros::NodeHandle &n)
 
     fsSettings["image_topic"] >> IMAGE_TOPIC;
     fsSettings["depth_topic"] >> DEPTH_TOPIC;
+    std::string image_topic_override;
+    if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+    {
+        IMAGE_TOPIC = image_topic_override;
+        ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+    }
+    std::string depth_topic_override;
+    if (n.getParam("depth_topic", depth_topic_override) && !depth_topic_override.empty())
+    {
+        DEPTH_TOPIC = depth_topic_override;
+        ROS_INFO_STREAM("Override depth_topic: " << DEPTH_TOPIC);
+    }
     fsSettings["imu_topic"] >> IMU_TOPIC;
     MAX_CNT = fsSettings["max_cnt"];
     MIN_DIST = fsSettings["min_dist"];
@@ -58,6 +77,20 @@ void readParameters(ros::NodeHandle &n)
     SHOW_TRACK = fsSettings["show_track"];
     EQUALIZE = fsSettings["equalize"];
     FISHEYE = fsSettings["fisheye"];
+    PCL_DIST = fsSettings["pcl_dist"];
+    U_BOUNDARY = fsSettings["u_boundary"];
+    D_BOUNDARY = fsSettings["d_boundary"];
+    L_BOUNDARY = fsSettings["l_boundary"];
+    R_BOUNDARY = fsSettings["r_boundary"];
+    PCL_MIN_DIST = fsSettings["pcl_min_dist"];
+    PCL_MAX_DIST = fsSettings["pcl_max_dist"];
+    if (PCL_DIST <= 0)
+        PCL_DIST = 10;
+    if (PCL_MAX_DIST <= PCL_MIN_DIST)
+    {
+        PCL_MIN_DIST = 0.3;
+        PCL_MAX_DIST = 6.0;
+    }
     if (FISHEYE == 1)
         FISHEYE_MASK = VINS_FOLDER_PATH + "config/fisheye_mask.jpg";
     CAM_NAMES.push_back(config_file);

@@ -19,7 +19,7 @@ vector<uchar> r_status;
 vector<float> r_err;
 queue<sensor_msgs::ImageConstPtr> img_buf;
 
-ros::Publisher pub_img,pub_match;
+ros::Publisher pub_img,pub_match,pub_depth_cloud;
 ros::Publisher pub_restart;
 
 FeatureTracker trackerData[NUM_OF_CAM];
@@ -147,6 +147,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &color_msg, const sensor_msgs
         pub_count++;
         //http://docs.ros.org/api/sensor_msgs/html/msg/PointCloud.html
         sensor_msgs::PointCloudPtr feature_points(new sensor_msgs::PointCloud);
+        sensor_msgs::PointCloudPtr depth_cloud(new sensor_msgs::PointCloud);
         sensor_msgs::ChannelFloat32 id_of_point;
         sensor_msgs::ChannelFloat32 u_of_point;
         sensor_msgs::ChannelFloat32 v_of_point;
@@ -157,6 +158,8 @@ void img_callback(const sensor_msgs::ImageConstPtr &color_msg, const sensor_msgs
 
         feature_points->header = color_msg->header;
         feature_points->header.frame_id = "world";
+        depth_cloud->header = color_msg->header;
+        depth_cloud->header.frame_id = "camera";
 
         vector<set<int>> hash_ids(NUM_OF_CAM);
         for (int i = 0; i < NUM_OF_CAM; i++)
@@ -205,6 +208,24 @@ void img_callback(const sensor_msgs::ImageConstPtr &color_msg, const sensor_msgs
         feature_points->channels.push_back(velocity_x_of_point);
         feature_points->channels.push_back(velocity_y_of_point);
         feature_points->channels.push_back(depth_of_point);
+        for (int u = L_BOUNDARY; u < COL - R_BOUNDARY; u += PCL_DIST)
+        {
+            for (int v = U_BOUNDARY; v < ROW - D_BOUNDARY; v += PCL_DIST)
+            {
+                float depth_val = static_cast<float>(show_depth.at<unsigned short>(v, u)) / 1000.0f;
+                if (depth_val <= PCL_MIN_DIST || depth_val >= PCL_MAX_DIST)
+                    continue;
+
+                Eigen::Vector2d pixel(u, v);
+                Eigen::Vector3d ray;
+                trackerData[0].m_camera->liftProjective(pixel, ray);
+                geometry_msgs::Point32 point;
+                point.x = ray.x() * depth_val;
+                point.y = ray.y() * depth_val;
+                point.z = depth_val;
+                depth_cloud->points.push_back(point);
+            }
+        }
         ROS_DEBUG("publish %f, at %f", feature_points->header.stamp.toSec(), ros::Time::now().toSec());
         // skip the first image; since no optical speed on frist image
         if (!init_pub)
@@ -214,6 +235,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &color_msg, const sensor_msgs
         else
         {
           pub_img.publish(feature_points);//"feature"
+          pub_depth_cloud.publish(depth_cloud);
         }
         // Show image with tracked points in rviz (by topic pub_match)
         if (SHOW_TRACK)
@@ -295,6 +317,7 @@ int main(int argc, char **argv)
     //ros::Subscriber sub_img = n.subscribe(IMAGE_TOPIC, 100, img_callback);
     //返回一个ros::Publisher对象  std_msgs::xxx的publisher,     1000: queue size
     pub_img = n.advertise<sensor_msgs::PointCloud>("feature", 1000);
+    pub_depth_cloud = n.advertise<sensor_msgs::PointCloud>("depth_cloud", 1000);
     pub_match = n.advertise<sensor_msgs::Image>("feature_img",1000);
     pub_restart = n.advertise<std_msgs::Bool>("restart",1000);
     /*

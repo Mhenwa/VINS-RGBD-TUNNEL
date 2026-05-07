@@ -1,10 +1,34 @@
 #include "pose_graph.h"
 #include "voxblox_mapper.h"
+#include <algorithm>
+#include <cmath>
 extern float RESOLUTION;
 extern int PCL_FILTER_MIN_DENSITY;
+extern int USE_DEPTH_TO_MAP_POSE_GRAPH;
+extern double DEPTH_MAP_WEIGHT;
+extern double DEPTH_MAP_HUBER;
+extern int DEPTH_MAP_MIN_EDGES;
+extern int DEPTH_MAP_MAX_EDGES_PER_FRAME;
+extern int DEPTH_MAP_NEIGHBOR_COUNT;
+extern double DEPTH_MAP_MAX_NEIGHBOR_DIST;
+extern double DEPTH_MAP_PLANE_MAX_DIST;
+extern double DEPTH_MAP_MIN_SCALE;
+extern int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES;
+extern int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL;
+extern Eigen::Matrix<double, 3, 1> ti_d;
+extern Eigen::Matrix<double, 3, 3> qi_d;
 
 namespace
 {
+struct PoseGraphDepthMapEdge
+{
+    int target_local_index;
+    Vector3d point_c;
+    Vector4d plane;
+    double scale;
+    double abs_distance;
+};
+
 pcl::PointXYZRGB makeColorPoint(const Vector3d &point_w, const cv::Vec3b &bgr)
 {
     pcl::PointXYZRGB color_point;
@@ -15,6 +39,140 @@ pcl::PointXYZRGB makeColorPoint(const Vector3d &point_w, const cv::Vec3b &bgr)
     color_point.g = bgr[1];
     color_point.b = bgr[0];
     return color_point;
+}
+
+bool fitPlane(const std::vector<int> &indices,
+              const pcl::PointCloud<pcl::PointXYZ>::Ptr &map_cloud,
+              Vector4d &plane)
+{
+    Vector3d centroid = Vector3d::Zero();
+    for (int idx : indices)
+        centroid += Vector3d(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+    centroid /= static_cast<double>(indices.size());
+
+    Matrix3d covariance = Matrix3d::Zero();
+    for (int idx : indices)
+    {
+        Vector3d point(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+        Vector3d delta = point - centroid;
+        covariance += delta * delta.transpose();
+    }
+
+    Eigen::SelfAdjointEigenSolver<Matrix3d> solver(covariance);
+    if (solver.info() != Eigen::Success)
+        return false;
+
+    Vector3d normal = solver.eigenvectors().col(0).normalized();
+    plane.head<3>() = normal;
+    plane(3) = -normal.dot(centroid);
+    return true;
+}
+
+Vector3d transformDepthPoint(const Vector3d &point_c, const Matrix3d &R_w_i, const Vector3d &P_w_i)
+{
+    return R_w_i * (qi_d * point_c + ti_d) + P_w_i;
+}
+
+std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector<KeyFrame*> &keyframes,
+                                                               const Quaterniond *q_array,
+                                                               double (*t_array)[3])
+{
+    std::vector<PoseGraphDepthMapEdge> edges;
+    if (!USE_DEPTH_TO_MAP_POSE_GRAPH || keyframes.size() < 2)
+        return edges;
+
+    const int target_count = std::min<int>(std::max(1, DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES),
+                                           static_cast<int>(keyframes.size()) - 1);
+    const int max_edges_per_target = std::max(1, DEPTH_MAP_MAX_EDGES_PER_FRAME / target_count);
+    const int first_target = static_cast<int>(keyframes.size()) - target_count;
+    const int neighbor_count = std::max(3, DEPTH_MAP_NEIGHBOR_COUNT);
+    const double max_neighbor_sq_dist = DEPTH_MAP_MAX_NEIGHBOR_DIST * DEPTH_MAP_MAX_NEIGHBOR_DIST;
+    if (first_target <= 0)
+        return edges;
+    for (int target = first_target; target < static_cast<int>(keyframes.size()); ++target)
+    {
+        const std::vector<cv::Point3f> &target_points = keyframes[target]->point_3d_depth_raw;
+        if (target_points.empty())
+            continue;
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        for (int frame = 0; frame < target; frame++)
+        {
+            if (keyframes[frame]->sequence != keyframes[target]->sequence)
+                continue;
+
+            Matrix3d R_w_i = q_array[frame].toRotationMatrix();
+            Vector3d P_w_i(t_array[frame][0], t_array[frame][1], t_array[frame][2]);
+            for (const cv::Point3f &point_cv : keyframes[frame]->point_3d_depth_raw)
+            {
+                Vector3d point_c(point_cv.x, point_cv.y, point_cv.z);
+                Vector3d point_w = transformDepthPoint(point_c, R_w_i, P_w_i);
+                map_cloud->push_back(pcl::PointXYZ(point_w.x(), point_w.y(), point_w.z()));
+            }
+        }
+        if (static_cast<int>(map_cloud->size()) < DEPTH_MAP_MIN_EDGES)
+            continue;
+
+        pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+        kdtree.setInputCloud(map_cloud);
+        Matrix3d target_R_w_i = q_array[target].toRotationMatrix();
+        Vector3d target_P_w_i(t_array[target][0], t_array[target][1], t_array[target][2]);
+
+        std::vector<PoseGraphDepthMapEdge> frame_edges;
+        frame_edges.reserve(std::min<int>(target_points.size(), max_edges_per_target));
+        int stride = std::max(1, static_cast<int>(target_points.size()) / max_edges_per_target);
+        std::vector<int> indices(neighbor_count);
+        std::vector<float> sq_distances(neighbor_count);
+        for (int idx = 0; idx < static_cast<int>(target_points.size()) && static_cast<int>(frame_edges.size()) < max_edges_per_target; idx += stride)
+        {
+            Vector3d point_c(target_points[idx].x, target_points[idx].y, target_points[idx].z);
+            Vector3d point_w = transformDepthPoint(point_c, target_R_w_i, target_P_w_i);
+            pcl::PointXYZ query(point_w.x(), point_w.y(), point_w.z());
+            if (kdtree.nearestKSearch(query, neighbor_count, indices, sq_distances) != neighbor_count)
+                continue;
+            if (sq_distances.back() > max_neighbor_sq_dist)
+                continue;
+
+            Vector4d plane;
+            if (!fitPlane(indices, map_cloud, plane))
+                continue;
+
+            bool valid_plane = true;
+            for (int nearest_idx : indices)
+            {
+                const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
+                double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
+                if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
+                {
+                    valid_plane = false;
+                    break;
+                }
+            }
+            if (!valid_plane)
+                continue;
+
+            double distance = plane.head<3>().dot(point_w) + plane(3);
+            double range2 = point_c.squaredNorm();
+            if (range2 < 1e-6)
+                continue;
+            double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
+            if (scale <= DEPTH_MAP_MIN_SCALE)
+                continue;
+
+            PoseGraphDepthMapEdge edge;
+            edge.target_local_index = target;
+            edge.point_c = point_c;
+            edge.plane = plane;
+            edge.scale = scale;
+            edge.abs_distance = std::abs(distance);
+            frame_edges.push_back(edge);
+        }
+
+        if (static_cast<int>(frame_edges.size()) >= DEPTH_MAP_MIN_EDGES)
+            edges.insert(edges.end(), frame_edges.begin(), frame_edges.end());
+    }
+
+    return edges;
 }
 }
 
@@ -87,6 +245,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     cur_kf->index = global_index;
     global_index++;
 	int loop_index = -1;
+    bool queue_pose_optimization = false;
 	// always true
     if (flag_detect_loop)
     {
@@ -148,9 +307,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
                 }
                 sequence_loop[cur_kf->sequence] = 1;
             }
-            m_optimize_buf.lock();
-            optimize_buf.push(cur_kf->index);
-            m_optimize_buf.unlock();
+            queue_pose_optimization = true;
         }
 	}
 	m_keyframelist.lock();
@@ -281,6 +438,18 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     pub_octree.publish(tmp_pcl);
 	m_keyframelist.unlock();
 
+    if (USE_DEPTH_TO_MAP_POSE_GRAPH && DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL > 0 &&
+        cur_kf->index > 0 && cur_kf->index % DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL == 0)
+    {
+        queue_pose_optimization = true;
+    }
+    if (queue_pose_optimization)
+    {
+        m_optimize_buf.lock();
+        optimize_buf.push(cur_kf->index);
+        m_optimize_buf.unlock();
+    }
+
 }
 
 void PoseGraph::setVoxbloxOutputDirectory(const std::string &output_dir)
@@ -310,6 +479,7 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     cur_kf->index = global_index;
     global_index++;
     int loop_index = -1;
+    bool queue_pose_optimization = false;
     if (flag_detect_loop)
        loop_index = detectLoop(cur_kf, cur_kf->index);
     else
@@ -324,9 +494,7 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
         {
             if (earliest_loop_index > loop_index || earliest_loop_index == -1)
                 earliest_loop_index = loop_index;
-            m_optimize_buf.lock();
-            optimize_buf.push(cur_kf->index);
-            m_optimize_buf.unlock();
+            queue_pose_optimization = true;
         }
     }
     m_keyframelist.lock();
@@ -379,6 +547,12 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     keyframelist.push_back(cur_kf);
     //publish();
     m_keyframelist.unlock();
+    if (queue_pose_optimization)
+    {
+        m_optimize_buf.lock();
+        optimize_buf.push(cur_kf->index);
+        m_optimize_buf.unlock();
+    }
 }
 
 KeyFrame* PoseGraph::getKeyFrame(int index)
@@ -522,6 +696,15 @@ void PoseGraph::optimize4DoF()
             TicToc tmp_t;
             m_keyframelist.lock();
             KeyFrame* cur_kf = getKeyFrame(cur_index);
+            if (cur_kf == NULL)
+            {
+                m_keyframelist.unlock();
+                std::chrono::milliseconds dura(2000);
+                std::this_thread::sleep_for(dura);
+                continue;
+            }
+            if (first_looped_index < 0)
+                first_looped_index = 0;
 
             int max_length = cur_index + 1;
 
@@ -545,6 +728,7 @@ void PoseGraph::optimize4DoF()
                 AngleLocalParameterization::Create();
 
             list<KeyFrame*>::iterator it;
+            std::vector<KeyFrame*> optimized_keyframes;
 
             int i = 0;
             for (it = keyframelist.begin(); it != keyframelist.end(); it++)
@@ -552,6 +736,7 @@ void PoseGraph::optimize4DoF()
                 if ((*it)->index < first_looped_index)
                     continue;
                 (*it)->local_index = i;
+                optimized_keyframes.push_back(*it);
                 Quaterniond tmp_q;
                 Matrix3d tmp_r;
                 Vector3d tmp_t;
@@ -618,6 +803,27 @@ void PoseGraph::optimize4DoF()
                 if ((*it)->index == cur_index)
                     break;
                 i++;
+            }
+            std::vector<PoseGraphDepthMapEdge> depth_edges =
+                buildPoseGraphDepthMapEdges(optimized_keyframes, q_array, t_array);
+            if (!depth_edges.empty())
+            {
+                ceres::LossFunction *depth_loss = DEPTH_MAP_HUBER > 0 ? new ceres::HuberLoss(DEPTH_MAP_HUBER) : NULL;
+                double avg_abs_distance = 0.0;
+                for (const PoseGraphDepthMapEdge &edge : depth_edges)
+                {
+                    int target_index = edge.target_local_index;
+                    ceres::CostFunction* cost_function = DepthToMapFourDOFError::Create(
+                        edge.point_c, edge.plane, edge.scale, DEPTH_MAP_WEIGHT,
+                        euler_array[target_index][1], euler_array[target_index][2], qi_d, ti_d);
+                    problem.AddResidualBlock(cost_function, depth_loss,
+                                             euler_array[target_index],
+                                             t_array[target_index]);
+                    avg_abs_distance += edge.abs_distance;
+                }
+                avg_abs_distance /= static_cast<double>(depth_edges.size());
+                ROS_INFO("pose graph depth-to-map edges: %lu avg_abs_dist: %.4f",
+                         depth_edges.size(), avg_abs_distance);
             }
             m_keyframelist.unlock();
 
