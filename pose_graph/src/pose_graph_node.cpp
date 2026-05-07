@@ -15,8 +15,13 @@
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
 #include <cv_bridge/cv_bridge.h>
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
 #include <iostream>
 #include <ros/package.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -59,6 +64,18 @@ int DEBUG_IMAGE;
 int VISUALIZE_IMU_FORWARD;
 int LOOP_CLOSURE;
 int FAST_RELOCALIZATION;
+int DENSE_DEPTH_MEDIAN_KERNEL = 3;
+int DENSE_DEPTH_EDGE_FILTER = 1;
+double DENSE_DEPTH_EDGE_THRESHOLD = 0.20;
+int DENSE_DEPTH_ADAPTIVE_SAMPLING = 1;
+int DENSE_DEPTH_NEAR_STRIDE = 5;
+int DENSE_DEPTH_MID_STRIDE = 10;
+int DENSE_DEPTH_FAR_STRIDE = 15;
+double DENSE_DEPTH_NEAR_RANGE = 2.0;
+double DENSE_DEPTH_MID_RANGE = 4.0;
+int DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME = 12000;
+int DENSE_DEPTH_PROFILE = 0;
+int AUTO_SAVE_MAP_ON_EXIT = 1;
 
 
 camodocal::CameraPtr m_camera;
@@ -80,6 +97,75 @@ std::string POSE_GRAPH_SAVE_PATH;
 std::string VINS_RESULT_PATH;
 std::string OUTPUT_PATH;
 std::string PCD_OUTPUT_PATH;
+
+float depthMetersAt(const cv::Mat &depth, int row, int col)
+{
+    if (row < 0 || row >= depth.rows || col < 0 || col >= depth.cols)
+        return 0.0f;
+    return static_cast<float>(depth.at<unsigned short>(row, col)) / 1000.0f;
+}
+
+bool validDepth(float depth)
+{
+    return std::isfinite(depth) && depth > PCL_MIN_DIST && depth < PCL_MAX_DIST;
+}
+
+bool isDepthDiscontinuity(const cv::Mat &depth, int row, int col, float center_depth)
+{
+    if (!DENSE_DEPTH_EDGE_FILTER)
+        return false;
+
+    const int dr[4] = {-1, 1, 0, 0};
+    const int dc[4] = {0, 0, -1, 1};
+    for (int k = 0; k < 4; ++k)
+    {
+        const float neighbor_depth = depthMetersAt(depth, row + dr[k], col + dc[k]);
+        if (validDepth(neighbor_depth) &&
+            std::abs(neighbor_depth - center_depth) > DENSE_DEPTH_EDGE_THRESHOLD)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+int denseDepthStride(float depth)
+{
+    if (!DENSE_DEPTH_ADAPTIVE_SAMPLING)
+        return std::max(1, PCL_DIST);
+    if (depth < DENSE_DEPTH_NEAR_RANGE)
+        return std::max(1, DENSE_DEPTH_NEAR_STRIDE);
+    if (depth < DENSE_DEPTH_MID_RANGE)
+        return std::max(1, DENSE_DEPTH_MID_STRIDE);
+    return std::max(1, DENSE_DEPTH_FAR_STRIDE);
+}
+
+void limitDenseDepthPoints(vector<cv::Point3f> &points, vector<cv::Vec3b> &colors)
+{
+    if (DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME <= 0 ||
+        static_cast<int>(points.size()) <= DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME)
+    {
+        return;
+    }
+
+    const size_t keep = static_cast<size_t>(DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME);
+    const size_t original_size = points.size();
+    vector<cv::Point3f> limited_points;
+    vector<cv::Vec3b> limited_colors;
+    limited_points.reserve(keep);
+    limited_colors.reserve(keep);
+    for (size_t out_idx = 0; out_idx < keep; ++out_idx)
+    {
+        const size_t src_idx = out_idx * original_size / keep;
+        limited_points.push_back(points[src_idx]);
+        if (src_idx < colors.size())
+            limited_colors.push_back(colors[src_idx]);
+        else
+            limited_colors.push_back(cv::Vec3b(128, 128, 128));
+    }
+    points.swap(limited_points);
+    colors.swap(limited_colors);
+}
 
 bool savePoseGraphOutputs(std::string *message)
 {
@@ -133,6 +219,27 @@ string joinPath(const string &base, const string &name)
     if (base.back() == '/')
         return base + name;
     return base + "/" + name;
+}
+
+bool directoryExists(const string &path)
+{
+    struct stat info;
+    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+bool makeDirectoryRecursive(const string &path)
+{
+    if (path.empty() || directoryExists(path))
+        return true;
+
+    string parent = parentPath(path);
+    if (!parent.empty() && parent != path && !makeDirectoryRecursive(parent))
+        return false;
+
+    if (mkdir(path.c_str(), 0755) == 0 || errno == EEXIST)
+        return directoryExists(path);
+
+    return false;
 }
 
 //not used in my case, just ignore sequence 1-5
@@ -370,7 +477,7 @@ void process()
 {
     if (!LOOP_CLOSURE)
         return;
-    while (true)
+    while (ros::ok())
     {
         sensor_msgs::ImageConstPtr image_msg = NULL;
         sensor_msgs::ImageConstPtr depth_msg = NULL;
@@ -533,29 +640,68 @@ void process()
 
                     //printf("u %f, v %f \n", p_2d_uv.x, p_2d_uv.y);
                 }
-                // ROW: 480 y  COL: 640 x
-                //debug: int count_ = 0;
-                for (int i = L_BOUNDARY; i < COL - R_BOUNDARY; i += PCL_DIST)
+                cv::Mat dense_depth = depth;
+                if (DENSE_DEPTH_MEDIAN_KERNEL >= 3)
                 {
-                    for (int j = U_BOUNDARY; j < ROW - D_BOUNDARY; j += PCL_DIST)
+                    if (DENSE_DEPTH_MEDIAN_KERNEL % 2 == 0)
+                        DENSE_DEPTH_MEDIAN_KERNEL += 1;
+                    cv::medianBlur(depth, dense_depth, DENSE_DEPTH_MEDIAN_KERNEL);
+                }
+
+                TicToc dense_depth_timer;
+                int depth_candidates = 0;
+                int depth_rejected_range = 0;
+                int depth_rejected_edge = 0;
+                int depth_rejected_stride = 0;
+                const int scan_stride = DENSE_DEPTH_ADAPTIVE_SAMPLING ?
+                    std::max(1, std::min(DENSE_DEPTH_NEAR_STRIDE,
+                                         std::min(DENSE_DEPTH_MID_STRIDE, DENSE_DEPTH_FAR_STRIDE))) :
+                    std::max(1, PCL_DIST);
+
+                for (int i = L_BOUNDARY; i < COL - R_BOUNDARY; i += scan_stride)
+                {
+                    for (int j = U_BOUNDARY; j < ROW - D_BOUNDARY; j += scan_stride)
                     {
+                        ++depth_candidates;
+                        float depth_val = depthMetersAt(dense_depth, j, i);
+                        if (!validDepth(depth_val))
+                        {
+                            ++depth_rejected_range;
+                            continue;
+                        }
+                        if (isDepthDiscontinuity(dense_depth, j, i, depth_val))
+                        {
+                            ++depth_rejected_edge;
+                            continue;
+                        }
+                        const int sample_stride = denseDepthStride(depth_val);
+                        if (((i - L_BOUNDARY) % sample_stride) != 0 ||
+                            ((j - U_BOUNDARY) % sample_stride) != 0)
+                        {
+                            ++depth_rejected_stride;
+                            continue;
+                        }
+
                         Eigen::Vector2d a(i, j);
                         Eigen::Vector3d b;
 						//depth is aligned
                         m_camera->liftProjective(a, b);
-                        float depth_val = ((float)depth.at<unsigned short>(j, i)) / 1000.0;
-                        if (depth_val > PCL_MIN_DIST && depth_val < PCL_MAX_DIST)
-                        {
-                            //debug: ++count_;
-                            point_3d_depth.push_back(cv::Point3f(b.x() * depth_val, b.y() * depth_val, depth_val));
-                            if (j >= 0 && j < color_image.rows && i >= 0 && i < color_image.cols)
-                                point_3d_depth_color.push_back(color_image.at<cv::Vec3b>(j, i));
-                            else
-                                point_3d_depth_color.push_back(cv::Vec3b(128, 128, 128));
-                        }
+                        point_3d_depth.push_back(cv::Point3f(b.x() * depth_val, b.y() * depth_val, depth_val));
+                        if (j >= 0 && j < color_image.rows && i >= 0 && i < color_image.cols)
+                            point_3d_depth_color.push_back(color_image.at<cv::Vec3b>(j, i));
+                        else
+                            point_3d_depth_color.push_back(cv::Vec3b(128, 128, 128));
                     }
                 }
-                //debug: ROS_WARN("Depth points count: %d", count_);
+                const int depth_points_before_limit = static_cast<int>(point_3d_depth.size());
+                limitDenseDepthPoints(point_3d_depth, point_3d_depth_color);
+                if (DENSE_DEPTH_PROFILE && frame_index % 30 == 0)
+                {
+                    ROS_INFO("dense depth points: %zu/%d candidates, range_reject: %d edge_reject: %d stride_reject: %d limited_from: %d time: %.2f ms",
+                             point_3d_depth.size(), depth_candidates,
+                             depth_rejected_range, depth_rejected_edge, depth_rejected_stride,
+                             depth_points_before_limit, dense_depth_timer.toc());
+                }
 
                 // 通过frame_index标记对应帧
                 // add sparse depth img to this class
@@ -580,7 +726,7 @@ void command()
 {
     if (!LOOP_CLOSURE)
         return;
-    while(1)
+    while(ros::ok())
     {
         char c = getchar();
         if (c == 's')
@@ -656,6 +802,50 @@ int main(int argc, char **argv)
             PCL_FILTER_MIN_DENSITY = fsSettings["pcl_filter_min_density"];
         if (PCL_FILTER_MIN_DENSITY < 1)
             PCL_FILTER_MIN_DENSITY = 1;
+        if (!fsSettings["dense_depth_median_kernel"].empty())
+            DENSE_DEPTH_MEDIAN_KERNEL = fsSettings["dense_depth_median_kernel"];
+        if (!fsSettings["dense_depth_edge_filter"].empty())
+            DENSE_DEPTH_EDGE_FILTER = fsSettings["dense_depth_edge_filter"];
+        if (!fsSettings["dense_depth_edge_threshold"].empty())
+            DENSE_DEPTH_EDGE_THRESHOLD = fsSettings["dense_depth_edge_threshold"];
+        if (!fsSettings["dense_depth_adaptive_sampling"].empty())
+            DENSE_DEPTH_ADAPTIVE_SAMPLING = fsSettings["dense_depth_adaptive_sampling"];
+        if (!fsSettings["dense_depth_near_stride"].empty())
+            DENSE_DEPTH_NEAR_STRIDE = fsSettings["dense_depth_near_stride"];
+        if (!fsSettings["dense_depth_mid_stride"].empty())
+            DENSE_DEPTH_MID_STRIDE = fsSettings["dense_depth_mid_stride"];
+        if (!fsSettings["dense_depth_far_stride"].empty())
+            DENSE_DEPTH_FAR_STRIDE = fsSettings["dense_depth_far_stride"];
+        if (!fsSettings["dense_depth_near_range"].empty())
+            DENSE_DEPTH_NEAR_RANGE = fsSettings["dense_depth_near_range"];
+        if (!fsSettings["dense_depth_mid_range"].empty())
+            DENSE_DEPTH_MID_RANGE = fsSettings["dense_depth_mid_range"];
+        if (!fsSettings["dense_depth_max_points_per_keyframe"].empty())
+            DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME = fsSettings["dense_depth_max_points_per_keyframe"];
+        if (!fsSettings["dense_depth_profile"].empty())
+            DENSE_DEPTH_PROFILE = fsSettings["dense_depth_profile"];
+        if (!fsSettings["auto_save_map_on_exit"].empty())
+            AUTO_SAVE_MAP_ON_EXIT = fsSettings["auto_save_map_on_exit"];
+        if (DENSE_DEPTH_MEDIAN_KERNEL < 0)
+            DENSE_DEPTH_MEDIAN_KERNEL = 0;
+        if (DENSE_DEPTH_NEAR_STRIDE < 1)
+            DENSE_DEPTH_NEAR_STRIDE = 1;
+        if (DENSE_DEPTH_MID_STRIDE < 1)
+            DENSE_DEPTH_MID_STRIDE = 1;
+        if (DENSE_DEPTH_FAR_STRIDE < 1)
+            DENSE_DEPTH_FAR_STRIDE = 1;
+        if (DENSE_DEPTH_EDGE_THRESHOLD <= 0.0)
+            DENSE_DEPTH_EDGE_THRESHOLD = 0.20;
+        if (DENSE_DEPTH_NEAR_RANGE <= 0.0)
+            DENSE_DEPTH_NEAR_RANGE = 2.0;
+        if (DENSE_DEPTH_MID_RANGE <= DENSE_DEPTH_NEAR_RANGE)
+            DENSE_DEPTH_MID_RANGE = DENSE_DEPTH_NEAR_RANGE + 1.0;
+        ROS_INFO("dense depth mapping: median_kernel: %d edge_filter: %d edge_threshold: %.3f adaptive: %d strides: %d/%d/%d ranges: %.2f/%.2f max_points: %d profile: %d",
+                 DENSE_DEPTH_MEDIAN_KERNEL, DENSE_DEPTH_EDGE_FILTER, DENSE_DEPTH_EDGE_THRESHOLD,
+                 DENSE_DEPTH_ADAPTIVE_SAMPLING, DENSE_DEPTH_NEAR_STRIDE, DENSE_DEPTH_MID_STRIDE,
+                 DENSE_DEPTH_FAR_STRIDE, DENSE_DEPTH_NEAR_RANGE, DENSE_DEPTH_MID_RANGE,
+                 DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME, DENSE_DEPTH_PROFILE);
+        ROS_INFO("auto save map on exit: %d", AUTO_SAVE_MAP_ON_EXIT);
         //OctreePointCloudDensity has no ::Ptr
         posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
@@ -681,6 +871,9 @@ int main(int argc, char **argv)
         PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");
         posegraph.setVoxbloxOutputDirectory(joinPath(parentPath(OUTPUT_PATH), "voxblox"));
         VINS_RESULT_PATH = OUTPUT_PATH;
+        makeDirectoryRecursive(OUTPUT_PATH);
+        makeDirectoryRecursive(POSE_GRAPH_SAVE_PATH);
+        makeDirectoryRecursive(PCD_OUTPUT_PATH);
         fsSettings["save_image"] >> DEBUG_IMAGE;
 
         cv::Mat cv_qid, cv_tid;
@@ -758,9 +951,20 @@ int main(int argc, char **argv)
     measurement_process = std::thread(process);
     // not used
     keyboard_command_process = std::thread(command);
+    keyboard_command_process.detach();
 
 
     ros::spin();
+    if (AUTO_SAVE_MAP_ON_EXIT)
+    {
+        std::string save_message;
+        if (savePoseGraphOutputs(&save_message))
+            ROS_INFO_STREAM("Auto-saved map on exit: " << save_message);
+        else
+            ROS_WARN_STREAM("Auto-save map on exit skipped: " << save_message);
+    }
+    if (measurement_process.joinable())
+        measurement_process.join();
 
     return 0;
 }

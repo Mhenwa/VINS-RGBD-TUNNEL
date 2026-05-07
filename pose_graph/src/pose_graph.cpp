@@ -504,7 +504,7 @@ void PoseGraph::addKeyFrameIntoVoc(KeyFrame* keyframe)
 
 void PoseGraph::optimize4DoF()
 {
-    while(true)
+    while(ros::ok())
     {
         int cur_index = -1;
         int first_looped_index = -1;

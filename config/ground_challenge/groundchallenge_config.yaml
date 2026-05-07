@@ -5,7 +5,8 @@ imu_topic: "/camera/imu"
 image_topic: "/camera/color/image_raw"
 
 depth_topic: "/camera/aligned_depth_to_color/image_raw"
-output_path: "/home/shanzy/output/vins/"
+output_path: "/workspace/VINS-RGBD/output/vins/"
+auto_save_map_on_exit: 1
 
 #pointcloud settings
 pcl_dist: 10
@@ -17,6 +18,17 @@ pcl_min_dist: 0.3
 pcl_max_dist: 6
 resolution: 0.02
 pcl_filter_min_density: 2
+dense_depth_median_kernel: 3
+dense_depth_edge_filter: 1
+dense_depth_edge_threshold: 0.20
+dense_depth_adaptive_sampling: 1
+dense_depth_near_stride: 5
+dense_depth_mid_stride: 10
+dense_depth_far_stride: 15
+dense_depth_near_range: 2.0
+dense_depth_mid_range: 4.0
+dense_depth_max_points_per_keyframe: 12000
+dense_depth_profile: 0
 
 #camera calibration
 
@@ -113,7 +125,7 @@ g_norm: 9.805       # gravity magnitude
 loop_closure: 1                    # start loop closure
 fast_relocalization: 1             # useful in real-time and large project
 load_previous_pose_graph: 0        # load and reuse previous pose graph; load from 'pose_graph_save_path'
-pose_graph_save_path: "/home/shanzy/output/pose_graph/" # save and load path
+pose_graph_save_path: "/workspace/VINS-RGBD/output/pose_graph/" # save and load path
 
 #unsynchronization parameters
 estimate_td: 1                      # online estimate time offset between camera and imu
