@@ -37,7 +37,30 @@ add_executable(feature_tracker
 
 target_link_libraries(feature_tracker ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
+set(ONNXRUNTIME_ROOT "/opt/onnxruntime" CACHE PATH "ONNX Runtime installation root")
+find_path(ONNXRUNTIME_INCLUDE_DIR
+    NAMES onnxruntime_cxx_api.h
+    PATHS "${ONNXRUNTIME_ROOT}/include"
+    NO_DEFAULT_PATH
+)
+find_library(ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime
+    PATHS "${ONNXRUNTIME_ROOT}/lib"
+    NO_DEFAULT_PATH
+)
+
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+    add_executable(zero_dce_onnx_enhancer
+        src/zero_dce_onnx_enhancer_node.cpp
+        )
+    target_include_directories(zero_dce_onnx_enhancer PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+    target_link_libraries(zero_dce_onnx_enhancer ${catkin_LIBRARIES} ${OpenCV_LIBS} ${ONNXRUNTIME_LIBRARY})
+else()
+    message(WARNING "ONNX Runtime not found under ${ONNXRUNTIME_ROOT}; zero_dce_onnx_enhancer will not be built.")
+endif()
+
 catkin_install_python(PROGRAMS
     scripts/zero_dce_enhancer_node.py
+    scripts/export_zero_dce_plus_onnx.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

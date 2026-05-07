@@ -3,16 +3,19 @@
     <arg name="depth_config_path" default = "$(find feature_tracker)/../config/realsense/realsense_depth_config.yaml" />
 	  <arg name="vins_path" default = "$(find feature_tracker)/../config/../" />
     <arg name="use_zero_dce" default="false" />
+    <arg name="zero_dce_use_onnx" default="false" />
     <arg name="zero_dce_input_topic" default="/camera/color/image_raw" />
     <arg name="zero_dce_output_topic" default="/zero_dce/image_enhanced" />
     <arg name="zero_dce_model_path" default="$(find feature_tracker)/models/zero_dce_plus_epoch99.pth" />
+    <arg name="zero_dce_onnx_model_path" default="$(find feature_tracker)/models/zero_dce_plus_480x640_sf12.onnx" />
     <arg name="zero_dce_use_gpu" default="true" />
     <arg name="zero_dce_scale_factor" default="12" />
     <arg name="zero_dce_profile" default="false" />
     <arg name="zero_dce_torch_threads" default="1" />
+    <arg name="zero_dce_intra_op_num_threads" default="1" />
     <arg name="zero_dce_queue_size" default="2" />
 
-    <node if="$(arg use_zero_dce)" name="zero_dce_enhancer" pkg="feature_tracker" type="zero_dce_enhancer_node.py" output="screen">
+    <node if="$(eval arg('use_zero_dce') and not arg('zero_dce_use_onnx'))" name="zero_dce_enhancer" pkg="feature_tracker" type="zero_dce_enhancer_node.py" output="screen">
         <param name="input_topic" type="string" value="$(arg zero_dce_input_topic)" />
         <param name="output_topic" type="string" value="$(arg zero_dce_output_topic)" />
         <param name="model_path" type="string" value="$(arg zero_dce_model_path)" />
@@ -20,6 +23,15 @@
         <param name="scale_factor" type="int" value="$(arg zero_dce_scale_factor)" />
         <param name="profile" type="bool" value="$(arg zero_dce_profile)" />
         <param name="torch_threads" type="int" value="$(arg zero_dce_torch_threads)" />
+        <param name="queue_size" type="int" value="$(arg zero_dce_queue_size)" />
+    </node>
+
+    <node if="$(eval arg('use_zero_dce') and arg('zero_dce_use_onnx'))" name="zero_dce_onnx_enhancer" pkg="feature_tracker" type="zero_dce_onnx_enhancer" output="screen">
+        <param name="input_topic" type="string" value="$(arg zero_dce_input_topic)" />
+        <param name="output_topic" type="string" value="$(arg zero_dce_output_topic)" />
+        <param name="model_path" type="string" value="$(arg zero_dce_onnx_model_path)" />
+        <param name="profile" type="bool" value="$(arg zero_dce_profile)" />
+        <param name="intra_op_num_threads" type="int" value="$(arg zero_dce_intra_op_num_threads)" />
         <param name="queue_size" type="int" value="$(arg zero_dce_queue_size)" />
     </node>
     

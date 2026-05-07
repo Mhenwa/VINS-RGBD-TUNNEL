@@ -100,6 +100,15 @@ roslaunch vins_estimator realsense_color.launch use_zero_dce:=true
 发布 `/zero_dce/image_enhanced`，并把 `feature_tracker` 和 `pose_graph` 的图像输入切到增强后的 topic。
 默认使用 `feature_tracker/models/zero_dce_plus_epoch99.pth`，`zero_dce_scale_factor:=12`。
 
+如果要使用 C++ ONNX Runtime CPU 版增强节点，把 ONNX 参数打开：
+
+```bash
+roslaunch vins_estimator realsense_color.launch use_zero_dce:=true zero_dce_use_onnx:=true
+```
+
+这会使用 `feature_tracker/models/zero_dce_plus_480x640_sf12.onnx`，固定支持当前
+Ground-Challenge/Realsense 配置的 `640x480` 图像。
+
 这个 launch 会同时启动：
 
 - `feature_tracker`
