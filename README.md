@@ -1,36 +1,184 @@
-2026.4.3
+2026.5.7
 
-删除了了Shpous，把对应部分换成了OpenCV
+当前 `final_feature` 默认启用完整系统：Zero-DCE++ ONNX C++ 低照增强、Depth-to-map 约束、Voxblox 稠密建图。不要用 `sudo` 进容器。
 
-不要用sudo进！！！
+## 快速开始
 
-## docker
+先在宿主机编译镜像并进入容器。`run_container.sh` 的参数是要挂载到 `/data/` 的 bag 文件。
 
-### 第一个终端
 ```bash
+cd /home/mhenwa/slam/VINS-RGBD
 docker build -t vins-rgbd:melodic -f docker/Dockerfile .
-./docker/run_container.sh
+./docker/run_container.sh /home/mhenwa/slam/bags/Normal.bag
 ```
 
-进容器后：
+容器内编译工作空间：
+
 ```bash
 ./docker/build_in_container.sh
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+```
+
+运行输出统一写到仓库根目录的 `output/`：
+
+- `output/vins/`：`vins_result_no_loop.csv`、`vins_result_loop.csv` 和外参结果
+- `output/eval/`：轨迹评估指标、对齐轨迹和误差图
+- `output/plots/`：只画运行轨迹的图
+- `output/gt/`：GT 提取与可视化结果
+- `output/pose_graph/`：pose graph 保存/加载目录
+- `output/pcd/`：pose graph 按键导出的 PCD
+- `output/voxblox/`：Voxblox `map.vxblx` 和 `mesh.ply`
+- `output/ablation/`：自动消融评测结果
+
+默认 launch 参数已经全部打开：
+
+- `use_zero_dce:=true`
+- `zero_dce_use_onnx:=true`
+- `use_depth_to_map:=1`
+- `use_depth_to_map_pose_graph:=1`
+
+需要关模块时直接覆盖对应参数。例如纯原版前端：
+
+```bash
+roslaunch vins_estimator realsense_color.launch \
+  use_zero_dce:=false \
+  use_depth_to_map:=0 \
+  use_depth_to_map_pose_graph:=0
+```
+
+## Release / Normal.bag
+
+`Normal.bag` 代表 Release/RealSense 数据，默认使用 `config/realsense/realsense_color_config.yaml` 和 `config/realsense/realsense_depth_config.yaml`。
+
+终端 1，启动完整系统：
+
+```bash
+cd /workspace/VINS-RGBD
 source /opt/ros/melodic/setup.bash
 source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 roslaunch vins_estimator realsense_color.launch
 ```
 
-运行输出统一写到仓库根目录的 `output/`。在容器里对应路径是 `/home/shanzy/output/`：
+终端 2，打开 RViz。这个配置会同时显示当前输入画面和 Zero-DCE++ 增强后画面：
 
-- `output/vins/`：VINS 运行结果 CSV 和外参标定结果
-- `output/eval/`：和 GT 对齐后的评估结果、误差图
-- `output/plots/`：只画运行轨迹的图
-- `output/gt/`：单独画 GT 的图
-- `output/pose_graph/`：pose graph 保存/加载目录
-- `output/pcd/`：pose graph 按键导出的 PCD
-- `output/voxblox/`：Voxblox TSDF/ESDF map 和 mesh 输出
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+roslaunch vins_estimator vins_rviz.launch \
+  rviz_config:=/workspace/VINS-RGBD/config/zero_dce_compare.rviz
+```
 
-默认会同时在 `pose_graph` 后端内嵌 Voxblox，使用关键帧深度采样生成 TSDF/ESDF。关键帧深度点会从同步彩色图像采样 RGB；legacy `/pose_graph/octree` 和按键保存的 PCD 发布/保存为彩色点云，Voxblox mesh 和 `mesh.ply` 默认也保留顶点颜色。相关话题：
+终端 3，播放 `Normal.bag`：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+rosbag play /data/Normal.bag
+```
+
+正常 `Ctrl+C` 退出算法终端会自动保存：
+
+- `output/voxblox/map.vxblx`
+- `output/voxblox/mesh.ply`
+- `output/vins/vins_result_loop.csv`
+
+打开 mesh：
+
+```bash
+meshlab output/voxblox/mesh.ply
+```
+
+`Normal.bag` 可从 bag 内 `/vrpn_client_node/jackal/pose` 提取 GT。提取脚本依赖 ROS/rosbag，先在容器内执行：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+cd /workspace/VINS-RGBD
+python tools/extract_pose_stamped_gt.py \
+  --bag /data/Normal.bag \
+  --topic /vrpn_client_node/jackal/pose \
+  --out output/gt/Normal_vrpn_gt.txt
+```
+
+然后在宿主机用通用轨迹评估工具对比：
+
+```bash
+cd /home/mhenwa/slam/VINS-RGBD
+python3 tools/eval_trajectory.py \
+  --est output/vins/vins_result_loop.csv \
+  --gt output/gt/Normal_vrpn_gt.txt \
+  --out-dir output/eval/normal \
+  --name normal_full
+```
+
+## Ground-Challenge / darkroom1.bag
+
+`darkroom1.bag` 代表 Ground-Challenge 数据，使用 `config/ground_challenge/groundchallenge_config.yaml` 和 `config/ground_challenge/groundchallenge_depth_config.yaml`。
+
+先用 darkroom bag 启动容器：
+
+```bash
+cd /home/mhenwa/slam/VINS-RGBD
+./docker/run_container.sh /home/mhenwa/slam/bags/darkroom1.bag
+```
+
+终端 1，启动完整系统：
+
+```bash
+cd /workspace/VINS-RGBD
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+roslaunch vins_estimator realsense_color.launch \
+  config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_config.yaml \
+  depth_config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_depth_config.yaml
+```
+
+终端 2，打开 RViz：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+roslaunch vins_estimator vins_rviz.launch \
+  rviz_config:=/workspace/VINS-RGBD/config/zero_dce_compare.rviz
+```
+
+终端 3，播放 `darkroom1.bag`：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+rosbag play /data/darkroom1.bag
+```
+
+用 Ground-Challenge pseudo GT 评估：
+
+```bash
+python3 tools/eval_trajectory.py \
+  --est output/vins/vins_result_loop.csv \
+  --gt /home/mhenwa/slam/Ground-Challenge/psudo_gt/darkroom1.txt \
+  --out-dir output/eval/darkroom1 \
+  --name darkroom1_full
+```
+
+也可以单独画 pseudo GT：
+
+```bash
+python3 tools/plot_ground_challenge_gt.py \
+  --gt /home/mhenwa/slam/Ground-Challenge/psudo_gt/darkroom1.txt \
+  --out-dir output/gt/darkroom1 \
+  --name darkroom1_gt
+```
+
+## Voxblox 建图
+
+默认会在 `pose_graph` 后端内嵌 Voxblox，使用关键帧深度采样生成 TSDF/ESDF。关键帧深度点会从同步彩色图像采样 RGB；legacy `/pose_graph/octree`、按键保存的 PCD、Voxblox mesh 和 `mesh.ply` 都保留颜色。
+
+相关话题：
 
 - `/pose_graph/voxblox/mesh`
 - `/pose_graph/voxblox/surface_pointcloud`
@@ -40,68 +188,76 @@ roslaunch vins_estimator realsense_color.launch
 - `/pose_graph/voxblox/esdf_slice`
 - `/pose_graph/voxblox/esdf_map_out`
 
-参数在 `config/voxblox/voxblox_config.yaml`，其中 `color_mode: color` 用于按 TSDF 积分颜色显示 Voxblox mesh。运行中在算法终端按 `s`，或在 Docker/roslaunch 下调用 `rosservice call /pose_graph/save_map`，会同时保存：
+参数在 `config/voxblox/voxblox_config.yaml`。运行中在算法终端按 `s`，或在容器里调用下面的服务，会保存 `map.vxblx` 和 `mesh.ply`：
 
-- `/home/shanzy/output/voxblox/map.vxblx`
-- `/home/shanzy/output/voxblox/mesh.ply`
-
-换成ground challenge的配置文件
 ```bash
-roslaunch vins_estimator realsense_color.launch \
-  config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_config.yaml \
-  depth_config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_depth_config.yaml
-
-```
-### 新建终端打开可视化：
-```bash
-docker exec -it vins-rgbd bash
-source /opt/ros/melodic/setup.bash
-source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
-roslaunch vins_estimator vins_rviz.launch
+rosservice call /pose_graph/save_map
 ```
 
-### 另一个终端播包：
+## 消融评测
+
+自动化脚本会完整跑 `Normal.bag` 和 `darkroom1.bag`，每个 bag 跑 4 组：
+
+- `baseline`：关闭 Zero-DCE++，关闭 Depth-to-map
+- `zero_dce_only`：只开启 Zero-DCE++ ONNX C++
+- `depth_to_map_only`：只开启 Depth-to-map
+- `full`：Zero-DCE++ ONNX C++ 和 Depth-to-map 全部开启
+
+完整命令：
+
 ```bash
-docker exec -it vins-rgbd bash
-source /opt/ros/melodic/setup.bash
-source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
-rosbag play /data/Normal.bag
+cd /home/mhenwa/slam/VINS-RGBD
+python3 tools/run_ablation_eval.py \
+  --normal-bag /home/mhenwa/slam/bags/Normal.bag \
+  --darkroom-bag /home/mhenwa/slam/bags/darkroom1.bag \
+  --gt-root /home/mhenwa/slam/Ground-Challenge/psudo_gt
 ```
 
-### 跑完后和 Ground-Challenge 的 `psudo_gt` 比较：
+如果已经编译过，可跳过编译：
+
 ```bash
-python3 tools/eval_ground_challenge.py \
-  --est output/vins/vins_result_loop.csv \
-  --seq darkroom1.bag \
-  --gt-root /home/mhenwa/slam/Ground-Challenge/psudo_gt \
-  --out-dir output/eval/darkroom1 \
-  --name loop
+python3 tools/run_ablation_eval.py --skip-build
 ```
 
-会输出：
+只跑某一个组合：
 
-- `<name>_metrics.json`
-- `<name>_aligned_est.txt`
-- `<name>_gt_used.txt`
-- `<name>_traj_xy.png`
-- `<name>_traj_xyz_time.png`
-- `<name>_trans_error_time.png`
-
-### 直接读取指定 `psudo_gt` 文件并画真值轨迹：
 ```bash
-python3 tools/plot_ground_challenge_gt.py \
-  --gt /home/mhenwa/slam/Ground-Challenge/psudo_gt/darkroom1.txt \
-  --out-dir output/gt/darkroom1 \
-  --name darkroom1_gt
+python3 tools/run_ablation_eval.py \
+  --skip-build \
+  --sequence darkroom1 \
+  --variant full
 ```
 
-会输出：
+每个 variant 会输出：
 
-- `<name>_trajectory.txt`
-- `<name>_traj_xy.png`
-- `<name>_traj_xyz_time.png`
+- `vins/vins_result_loop.csv`
+- `voxblox/map.vxblx`
+- `voxblox/mesh.ply`
+- `perf_monitor.json`
+- `eval/<variant>_metrics.json`
+- `eval/<variant>_traj_xy.png`
+- `eval/<variant>_traj_xyz_time.png`
+- `eval/<variant>_trans_error_time.png`
 
+汇总文件：
 
+- `output/ablation/<timestamp>/summary.csv`
+- `output/ablation/<timestamp>/summary.md`
+
+本次完整消融结果，输出目录为 `output/ablation/final_ablation_20260507_210429/`：
+
+| Seq | Variant | ATE RMSE m | ATE Mean m | ATE Max m | Enhanced Hz | Feature Hz | Odom Hz | Raw->Enh ms | Img->Feat ms | Img->Odom ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| normal | baseline | 0.1476 | 0.1356 | 0.3951 |  | 7.3613 | 7.3715 |  | 25.9849 | 57.5555 |
+| normal | zero_dce_only | 0.1442 | 0.1315 | 0.3938 | 20.4944 | 6.8311 | 6.8413 | 12.8579 | 17.0156 | 89.2019 |
+| normal | depth_to_map_only | 0.1405 | 0.1291 | 0.4268 |  | 7.3202 | 7.3330 |  | 26.2489 | 57.4532 |
+| normal | full | 0.1582 | 0.1480 | 0.3727 | 20.4279 | 6.8091 | 6.8160 | 12.9601 | 17.1076 | 55.9022 |
+| darkroom1 | baseline | 0.4305 | 0.3988 | 0.6983 |  | 10.4900 | 10.5205 |  | 8.7332 | 29.4437 |
+| darkroom1 | zero_dce_only | 0.4176 | 0.3775 | 0.8990 | 14.9910 | 10.4903 | 10.5191 | 12.7395 | 8.5422 | 30.6502 |
+| darkroom1 | depth_to_map_only | 0.4181 | 0.3853 | 0.7373 |  | 10.4903 | 10.5195 |  | 8.4712 | 31.4505 |
+| darkroom1 | full | 0.4016 | 0.3638 | 0.8406 | 14.9914 | 10.4915 | 10.5209 | 12.7147 | 8.6047 | 33.2247 |
+
+从这次结果看，Ground-Challenge 的 `darkroom1.bag` 上完整系统 ATE RMSE 最低；`Normal.bag` 上 Depth-to-map 单独开启最好，完整系统略差于 baseline。实时性方面，Zero-DCE++ ONNX C++ 增强节点在 CPU 上约 15-20 Hz，前端和里程计维持约 6.8-10.5 Hz。
 
 ---
 
