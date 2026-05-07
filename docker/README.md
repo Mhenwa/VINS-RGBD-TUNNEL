@@ -19,11 +19,11 @@
 ## 1. 文件说明
 
 - `docker/Dockerfile`
-  - 构建 ROS Melodic 镜像，并预装 Ceres、PCL、OpenCV、catkin_tools。
+  - 构建 ROS Melodic 镜像，并预装 Ceres、PCL、OpenCV、catkin_tools 和 Voxblox 源码构建依赖。
 - `docker/run_container.sh`
   - 只负责启动容器和挂载目录，不做编译。
 - `docker/build_in_container.sh`
-  - 只负责在容器内创建 catkin workspace 并编译。
+  - 只负责在容器内创建 catkin workspace，拉取固定版本 Voxblox 依赖并编译。
 
 ## 2. 第一步：构建镜像
 
@@ -96,6 +96,8 @@ roslaunch vins_estimator realsense_color.launch
 - `vins_estimator`
 - `pose_graph`
 
+`pose_graph` 会在后端内嵌 Voxblox，默认发布 `/pose_graph/voxblox/mesh`、TSDF/ESDF 点云、切片和 ESDF layer。深度关键帧会从同步彩色图像采样 RGB，因此 legacy `/pose_graph/octree`、保存的 PCD、Voxblox mesh 和 `mesh.ply` 都是彩色输出。容器内可用 `rosservice call /pose_graph/save_map` 保存 pose graph 和 Voxblox sidecar map。
+
 ## 6. 第五步：回放 bag
 
 新开一个宿主机终端，进入同一个容器：
@@ -159,6 +161,11 @@ roslaunch vins_estimator vins_rviz.launch
 - 宿主机输出结果：
 ```bash
 <repo>/output
+```
+
+- Voxblox map 和 mesh：
+```bash
+<repo>/output/voxblox
 ```
 
 ## 9. 最小使用流程

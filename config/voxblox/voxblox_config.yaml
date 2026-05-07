@@ -1,0 +1,38 @@
+enabled: true
+world_frame: world
+
+tsdf_voxel_size: 0.05
+tsdf_voxels_per_side: 16
+method: fast
+truncation_distance: 0.20
+min_ray_length_m: 0.3
+max_ray_length_m: 6.0
+max_weight: 10000.0
+voxel_carving_enabled: true
+use_const_weight: false
+allow_clear: true
+use_weight_dropoff: true
+anti_grazing: false
+start_voxel_subsampling_factor: 2.0
+max_consecutive_ray_collisions: 2
+max_integration_time_s: 3.40282e+38
+
+esdf_max_distance_m: 2.0
+esdf_default_distance_m: 2.0
+esdf_min_distance_m: 0.1
+esdf_min_diff_m: 0.001
+esdf_full_euclidean_distance: false
+esdf_add_occupied_crust: false
+
+mesh_min_weight: 0.0001
+mesh_use_color: true
+color_mode: color
+slice_level: 0.5
+
+update_esdf_every_n_keyframes: 1
+update_mesh_every_n_keyframes: 5
+publish_tsdf_pointcloud: true
+publish_surface_pointcloud: true
+publish_esdf_pointcloud: true
+publish_slices: true
+publish_esdf_map: true

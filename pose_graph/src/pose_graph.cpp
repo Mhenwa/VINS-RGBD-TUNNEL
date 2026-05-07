@@ -1,5 +1,23 @@
 #include "pose_graph.h"
+#include "voxblox_mapper.h"
 extern float RESOLUTION;
+extern int PCL_FILTER_MIN_DENSITY;
+
+namespace
+{
+pcl::PointXYZRGB makeColorPoint(const Vector3d &point_w, const cv::Vec3b &bgr)
+{
+    pcl::PointXYZRGB color_point;
+    color_point.x = point_w(0);
+    color_point.y = point_w(1);
+    color_point.z = point_w(2);
+    color_point.r = bgr[2];
+    color_point.g = bgr[1];
+    color_point.b = bgr[0];
+    return color_point;
+}
+}
+
 PoseGraph::PoseGraph()
 {
     posegraph_visualization = new CameraPoseVisualization(1.0, 0.0, 1.0, 1.0);
@@ -32,6 +50,9 @@ void PoseGraph::registerPub(ros::NodeHandle &n)
     pub_octree = n.advertise<sensor_msgs::PointCloud2>("octree", 1000);
     for (int i = 1; i < 10; i++)
         pub_path[i] = n.advertise<nav_msgs::Path>("path_" + to_string(i), 1000);
+
+    voxblox_mapper.reset(new VoxbloxMapper());
+    voxblox_mapper->configure(n);
 }
 
 void PoseGraph::loadVocabulary(std::string voc_path)
@@ -170,16 +191,30 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
         if (octree->getVoxelDensityAtPoint(searchPoint) < 5)
         {
             cur_kf->point_3d_depth[pcl_count_temp] = pcl;
+            if (i < cur_kf->point_3d_depth_color.size())
+                cur_kf->point_3d_depth_color[pcl_count_temp] = cur_kf->point_3d_depth_color[i];
             octree->addPointToCloud(searchPoint, cloud);
-            // Uncomment this to get pointcloud
-            //save_cloud->points.push_back(searchPoint);
+            const cv::Vec3b bgr = i < cur_kf->point_3d_depth_color.size() ?
+                cur_kf->point_3d_depth_color[i] : cv::Vec3b(128, 128, 128);
+            const pcl::PointXYZRGB color_point = makeColorPoint(w_pts_i, bgr);
+            color_cloud->push_back(color_point);
+            save_cloud->push_back(color_point);
             ++pcl_count_temp;
         }
     }
     cur_kf->point_3d_depth.resize(pcl_count_temp);
-    pcl::toROSMsg(*(octree->getInputCloud()), tmp_pcl);
+    cur_kf->point_3d_depth_color.resize(pcl_count_temp);
+    pcl::toROSMsg(*color_cloud, tmp_pcl);
     m_octree.unlock();
 
+    if (voxblox_mapper && voxblox_mapper->enabled())
+    {
+        std::lock_guard<std::mutex> lock(m_voxblox);
+        voxblox_mapper->integrateKeyFrame(cur_kf->point_3d_depth_raw,
+                                          cur_kf->point_3d_depth_color_raw,
+                                          R, P, qi_d, ti_d,
+                                          ros::Time(cur_kf->time_stamp));
+    }
 
     // not used
     if (SAVE_LOOP_PATH)
@@ -246,6 +281,27 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     pub_octree.publish(tmp_pcl);
 	m_keyframelist.unlock();
 
+}
+
+void PoseGraph::setVoxbloxOutputDirectory(const std::string &output_dir)
+{
+    std::lock_guard<std::mutex> lock(m_voxblox);
+    if (voxblox_mapper)
+        voxblox_mapper->setOutputDirectory(output_dir);
+}
+
+void PoseGraph::saveVoxbloxMap()
+{
+    std::lock_guard<std::mutex> lock(m_voxblox);
+    if (voxblox_mapper && voxblox_mapper->enabled())
+        voxblox_mapper->saveMap();
+}
+
+void PoseGraph::loadVoxbloxMap()
+{
+    std::lock_guard<std::mutex> lock(m_voxblox);
+    if (voxblox_mapper && voxblox_mapper->enabled())
+        voxblox_mapper->loadMap();
 }
 
 
@@ -448,7 +504,7 @@ void PoseGraph::addKeyFrameIntoVoc(KeyFrame* keyframe)
 
 void PoseGraph::optimize4DoF()
 {
-    while(true)
+    while(ros::ok())
     {
         int cur_index = -1;
         int first_looped_index = -1;
@@ -630,8 +686,12 @@ void PoseGraph::updatePath()
     // store info for updating dense pcl without locking keyframe list
     // which may take much time
     vector<vector<cv::Point3f>> tmp_keyframelist;
-    queue<pair<Matrix3d, Vector3d>> tmp_RTlist;
+    vector<vector<cv::Vec3b>> tmp_keyframe_colorlist;
+    vector<vector<cv::Point3f>> tmp_voxblox_keyframelist;
+    vector<vector<cv::Vec3b>> tmp_voxblox_colorlist;
+    vector<pair<Matrix3d, Vector3d>> tmp_RTlist;
     std_msgs::Header tmp_header;
+    bool has_voxblox_points = false;
 
 
     m_keyframelist.lock();
@@ -655,7 +715,7 @@ void PoseGraph::updatePath()
         Matrix3d R;
         (*it)->getPose(P, R);
 
-        tmp_RTlist.push(make_pair(R, P));
+        tmp_RTlist.push_back(make_pair(R, P));
 
         Quaterniond Q;
         Q = R;
@@ -672,7 +732,12 @@ void PoseGraph::updatePath()
         pose_stamped.pose.orientation.z = Q.z();
         pose_stamped.pose.orientation.w = Q.w();
 
-        tmp_keyframelist.push_back((*it)->point_3d_depth);
+        tmp_keyframelist.push_back((*it)->point_3d_depth_raw);
+        tmp_keyframe_colorlist.push_back((*it)->point_3d_depth_color_raw);
+        tmp_voxblox_keyframelist.push_back((*it)->point_3d_depth_raw);
+        tmp_voxblox_colorlist.push_back((*it)->point_3d_depth_color_raw);
+        if (!(*it)->point_3d_depth_raw.empty())
+            has_voxblox_points = true;
 
 
 
@@ -755,26 +820,40 @@ void PoseGraph::updatePath()
     }
     publish();
     m_keyframelist.unlock();
+
+    if (voxblox_mapper && voxblox_mapper->enabled() && has_voxblox_points)
+    {
+        ros::Time map_stamp = tmp_header.stamp.isZero() ? ros::Time::now() : tmp_header.stamp;
+        std::lock_guard<std::mutex> lock(m_voxblox);
+        voxblox_mapper->rebuild(tmp_voxblox_keyframelist, tmp_voxblox_colorlist,
+                                tmp_RTlist, qi_d, ti_d, map_stamp);
+    }
     
     // throw the costy part beyond m_keyframelist
+    sensor_msgs::PointCloud2 rebuilt_pcl;
+    bool publish_rebuilt_pcl = false;
     m_octree.lock();
     //some clean up
     octree->deleteTree();
     cloud->clear();
-    //save_cloud->clear();
+    color_cloud->clear();
+    save_cloud->clear();
     octree->setInputCloud(cloud);
     octree->addPointsFromInputCloud();
     octree->defineBoundingBox(-100, -100, -100, 100, 100, 100);
     int update_count = 0;
-    for (auto &pcl_vect : tmp_keyframelist)
+    int accepted_count = 0;
+    for (size_t kf_idx = 0; kf_idx < tmp_keyframelist.size(); ++kf_idx)
     {
+        auto &pcl_vect = tmp_keyframelist[kf_idx];
         Vector3d P;
         Matrix3d R;
-        R = tmp_RTlist.front().first;
-        P = tmp_RTlist.front().second;
-        for (auto &pcl : pcl_vect)
+        R = tmp_RTlist[kf_idx].first;
+        P = tmp_RTlist[kf_idx].second;
+        const auto &color_vect = tmp_keyframe_colorlist[kf_idx];
+        for (size_t point_idx = 0; point_idx < pcl_vect.size(); ++point_idx)
         {
-            
+            const cv::Point3f &pcl = pcl_vect[point_idx];
             Vector3d pts_i(pcl.x , pcl.y, pcl.z);
             Vector3d w_pts_i = R * (qi_d * pts_i + ti_d) + P;
             pcl::PointXYZ searchPoint;
@@ -782,33 +861,62 @@ void PoseGraph::updatePath()
             searchPoint.y = w_pts_i(1);
             searchPoint.z = w_pts_i(2);
             ++update_count;
+            if (octree->getVoxelDensityAtPoint(searchPoint) >= 5)
+                continue;
             octree->addPointToCloud(searchPoint, cloud);
-            // Uncomment this to get pointcloud
-            //save_cloud->points.push_back(searchPoint);
+            const cv::Vec3b bgr = point_idx < color_vect.size() ?
+                color_vect[point_idx] : cv::Vec3b(128, 128, 128);
+            const pcl::PointXYZRGB color_point = makeColorPoint(w_pts_i, bgr);
+            color_cloud->push_back(color_point);
+            save_cloud->push_back(color_point);
+            ++accepted_count;
         }
-        tmp_RTlist.pop();
     }
-    pclFilter(true);
+    if (PCL_FILTER_MIN_DENSITY > 1)
+        pclFilter(true);
+    const int filtered_count = color_cloud ? static_cast<int>(color_cloud->size()) : 0;
+    if (color_cloud && !color_cloud->empty())
+    {
+        pcl::toROSMsg(*color_cloud, rebuilt_pcl);
+        rebuilt_pcl.header.stamp = tmp_header.stamp.isZero() ? ros::Time::now() : tmp_header.stamp;
+        rebuilt_pcl.header.frame_id = "world";
+        publish_rebuilt_pcl = true;
+    }
     m_octree.unlock();
-    ROS_INFO("Update done! Time cost: %f   total points: %d", t_update.toc(), update_count);
+    if (publish_rebuilt_pcl)
+        pub_octree.publish(rebuilt_pcl);
+    ROS_INFO("Update done! Time cost: %f   raw points: %d accepted points: %d filtered points: %d min_density: %d",
+             t_update.toc(), update_count, accepted_count, filtered_count, PCL_FILTER_MIN_DENSITY);
 
 }
 
 void PoseGraph::pclFilter(bool flag)
 {
     pcl::PointCloud<pcl::PointXYZ> cloud_copy(*(octree->getInputCloud()));
+    pcl::PointCloud<pcl::PointXYZRGB> color_cloud_copy(*color_cloud);
     pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>* temp_octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
     pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp_color_cloud =
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>());
 
     cout<<"Size of Cloud before filter:"<<cloud_copy.size()<<endl;
-    pcl::PointCloud<pcl::PointXYZ>::iterator pcl_iter= cloud_copy.begin();
-    while(pcl_iter != cloud_copy.end())
+    for (size_t point_idx = 0; point_idx < cloud_copy.size(); ++point_idx)
     {
-        if (octree->getVoxelDensityAtPoint(*pcl_iter) >= 3)
+        if (static_cast<int>(octree->getVoxelDensityAtPoint(cloud_copy[point_idx])) >= PCL_FILTER_MIN_DENSITY)
         {
-            temp_cloud->push_back(*pcl_iter);
+            temp_cloud->push_back(cloud_copy[point_idx]);
+            if (point_idx < color_cloud_copy.size())
+                temp_color_cloud->push_back(color_cloud_copy[point_idx]);
+            else
+            {
+                pcl::PointXYZRGB color_point;
+                color_point.x = cloud_copy[point_idx].x;
+                color_point.y = cloud_copy[point_idx].y;
+                color_point.z = cloud_copy[point_idx].z;
+                color_point.r = color_point.g = color_point.b = 128;
+                temp_color_cloud->push_back(color_point);
+            }
         }
-        ++pcl_iter;
     }
     temp_octree->defineBoundingBox(-100, -100, -100, 100, 100, 100);
     temp_octree->setInputCloud(temp_cloud);
@@ -822,6 +930,7 @@ void PoseGraph::pclFilter(bool flag)
         (*cloud).clear();
         octree = temp_octree;
         cloud = temp_cloud;
+        color_cloud = temp_color_cloud;
         //sensor_msgs::PointCloud2 tmp_pcl;
         //pcl::toROSMsg(*temp_cloud, tmp_pcl);
         //tmp_pcl.header.stamp =  ros::Time::now();
@@ -832,7 +941,7 @@ void PoseGraph::pclFilter(bool flag)
     else
     {
         sensor_msgs::PointCloud2 tmp_pcl;
-        pcl::toROSMsg(*temp_cloud, tmp_pcl);
+        pcl::toROSMsg(*temp_color_cloud, tmp_pcl);
         tmp_pcl.header.stamp =  ros::Time::now();
         tmp_pcl.header.frame_id = "world";
         pub_octree.publish(tmp_pcl);
@@ -856,6 +965,16 @@ void PoseGraph::savePoseGraph()
     pFile = fopen (file_path.c_str(),"w");
     pFile_shan_pg = fopen(file_path_shan_pg.c_str(),"w");
     pFile_shan_vio = fopen(file_path_shan_vio.c_str(),"w");
+    if (!pFile)
+    {
+        ROS_ERROR("Failed to open pose graph save file: %s", file_path.c_str());
+        m_keyframelist.unlock();
+        return;
+    }
+    if (!pFile_shan_pg)
+        ROS_WARN("Skipping legacy pose graph trajectory export: %s", file_path_shan_pg.c_str());
+    if (!pFile_shan_vio)
+        ROS_WARN("Skipping legacy VIO trajectory export: %s", file_path_shan_vio.c_str());
     //fprintf(pFile, "index time_stamp Tx Ty Tz Qw Qx Qy Qz loop_index loop_info\n");
     list<KeyFrame*>::iterator it;
     for (it = keyframelist.begin(); it != keyframelist.end(); it++)
@@ -882,12 +1001,14 @@ void PoseGraph::savePoseGraph()
                  (*it)->loop_info(0), (*it)->loop_info(1), (*it)->loop_info(2), (*it)->loop_info(3),
                  (*it)->loop_info(4), (*it)->loop_info(5), (*it)->loop_info(6), (*it)->loop_info(7),
                  (int)(*it)->keypoints.size());
-        fprintf (pFile_shan_pg, "%f %f %f %f %f %f %f %f\n",(*it)->time_stamp,
-                 PG_tmp_T.x(), PG_tmp_T.y(), PG_tmp_T.z(),
-                 PG_tmp_Q.x(), PG_tmp_Q.y(), PG_tmp_Q.z(),PG_tmp_Q.w());
-        fprintf (pFile_shan_vio, "%f %f %f %f %f %f %f %f\n",(*it)->time_stamp,
-                 VIO_tmp_T.x(), VIO_tmp_T.y(), VIO_tmp_T.z(),
-                 VIO_tmp_Q.x(), VIO_tmp_Q.y(), VIO_tmp_Q.z(),VIO_tmp_Q.w());
+        if (pFile_shan_pg)
+            fprintf (pFile_shan_pg, "%f %f %f %f %f %f %f %f\n",(*it)->time_stamp,
+                     PG_tmp_T.x(), PG_tmp_T.y(), PG_tmp_T.z(),
+                     PG_tmp_Q.x(), PG_tmp_Q.y(), PG_tmp_Q.z(),PG_tmp_Q.w());
+        if (pFile_shan_vio)
+            fprintf (pFile_shan_vio, "%f %f %f %f %f %f %f %f\n",(*it)->time_stamp,
+                     VIO_tmp_T.x(), VIO_tmp_T.y(), VIO_tmp_T.z(),
+                     VIO_tmp_Q.x(), VIO_tmp_Q.y(), VIO_tmp_Q.z(),VIO_tmp_Q.w());
 
         // write keypoints, brief_descriptors   vector<cv::KeyPoint> keypoints vector<BRIEF::bitset> brief_descriptors;
         assert((*it)->keypoints.size() == (*it)->brief_descriptors.size());
@@ -896,17 +1017,23 @@ void PoseGraph::savePoseGraph()
         keypoints_path = POSE_GRAPH_SAVE_PATH + to_string((*it)->index) + "_keypoints.txt";
         FILE *keypoints_file;
         keypoints_file = fopen(keypoints_path.c_str(), "w");
+        if (!keypoints_file)
+            ROS_WARN("Failed to open keypoints save file: %s", keypoints_path.c_str());
         for (int i = 0; i < (int)(*it)->keypoints.size(); i++)
         {
             brief_file << (*it)->brief_descriptors[i] << endl;
-            fprintf(keypoints_file, "%f %f %f %f\n", (*it)->keypoints[i].pt.x, (*it)->keypoints[i].pt.y,
-                    (*it)->keypoints_norm[i].pt.x, (*it)->keypoints_norm[i].pt.y);
+            if (keypoints_file)
+                fprintf(keypoints_file, "%f %f %f %f\n", (*it)->keypoints[i].pt.x, (*it)->keypoints[i].pt.y,
+                        (*it)->keypoints_norm[i].pt.x, (*it)->keypoints_norm[i].pt.y);
         }
         brief_file.close();
-        fclose(keypoints_file);
+        if (keypoints_file)
+            fclose(keypoints_file);
     }
-    fclose(pFile_shan_vio);
-    fclose(pFile_shan_pg);
+    if (pFile_shan_vio)
+        fclose(pFile_shan_vio);
+    if (pFile_shan_pg)
+        fclose(pFile_shan_pg);
     fclose(pFile);
 
 

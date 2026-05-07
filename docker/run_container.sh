@@ -29,7 +29,8 @@ mkdir -p \
   "${output_dir}/plots" \
   "${output_dir}/gt" \
   "${output_dir}/pose_graph" \
-  "${output_dir}/pcd"
+  "${output_dir}/pcd" \
+  "${output_dir}/voxblox"
 mkdir -p "${workspace_dir}"
 
 xhost +local: >/dev/null 2>&1 || true

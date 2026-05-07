@@ -2,6 +2,7 @@
 
 #include <thread>
 #include <mutex>
+#include <memory>
 #include <opencv2/opencv.hpp>
 #include <eigen3/Eigen/Dense>
 #include <string>
@@ -28,6 +29,7 @@
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 #include <pcl/octree/octree.h>
 #include <pcl/octree/octree_impl.h>
 #include <pcl/io/pcd_io.h>
@@ -38,6 +40,8 @@
 
 using namespace DVision;
 using namespace DBoW2;
+
+class VoxbloxMapper;
 
 class PoseGraph
 {
@@ -57,6 +61,9 @@ public:
 	CameraPoseVisualization* posegraph_visualization;
 	void pclFilter(bool flag);
 	void savePoseGraph();
+	void setVoxbloxOutputDirectory(const std::string &output_dir);
+	void saveVoxbloxMap();
+	void loadVoxbloxMap();
 	void loadPoseGraph();
 	void publish();
 	Vector3d t_drift;
@@ -67,7 +74,9 @@ public:
 	Matrix3d w_r_vio;
     pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>* octree;
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr save_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr color_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr save_cloud;
+    std::unique_ptr<VoxbloxMapper> voxblox_mapper;
 
 
 private:
@@ -81,6 +90,7 @@ private:
 	std::mutex m_path;
 	std::mutex m_drift;
 	std::mutex m_octree;
+	std::mutex m_voxblox;
 	std::thread t_optimization;
 	std::queue<int> optimize_buf;
 

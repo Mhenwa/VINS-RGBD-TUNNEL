@@ -28,6 +28,22 @@ roslaunch vins_estimator realsense_color.launch
 - `output/gt/`：单独画 GT 的图
 - `output/pose_graph/`：pose graph 保存/加载目录
 - `output/pcd/`：pose graph 按键导出的 PCD
+- `output/voxblox/`：Voxblox TSDF/ESDF map 和 mesh 输出
+
+默认会同时在 `pose_graph` 后端内嵌 Voxblox，使用关键帧深度采样生成 TSDF/ESDF。关键帧深度点会从同步彩色图像采样 RGB；legacy `/pose_graph/octree` 和按键保存的 PCD 发布/保存为彩色点云，Voxblox mesh 和 `mesh.ply` 默认也保留顶点颜色。相关话题：
+
+- `/pose_graph/voxblox/mesh`
+- `/pose_graph/voxblox/surface_pointcloud`
+- `/pose_graph/voxblox/tsdf_pointcloud`
+- `/pose_graph/voxblox/esdf_pointcloud`
+- `/pose_graph/voxblox/tsdf_slice`
+- `/pose_graph/voxblox/esdf_slice`
+- `/pose_graph/voxblox/esdf_map_out`
+
+参数在 `config/voxblox/voxblox_config.yaml`，其中 `color_mode: color` 用于按 TSDF 积分颜色显示 Voxblox mesh。运行中在算法终端按 `s`，或在 Docker/roslaunch 下调用 `rosservice call /pose_graph/save_map`，会同时保存：
+
+- `/home/shanzy/output/voxblox/map.vxblx`
+- `/home/shanzy/output/voxblox/mesh.ply`
 
 换成ground challenge的配置文件
 ```bash
