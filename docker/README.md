@@ -90,7 +90,7 @@ source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 roslaunch vins_estimator realsense_color.launch
 ```
 
-如果要启用 Zero-DCE 低照度增强，把 launch 参数打开：
+如果要启用 Zero-DCE++ 低照度增强，把 launch 参数打开：
 
 ```bash
 roslaunch vins_estimator realsense_color.launch use_zero_dce:=true
@@ -98,6 +98,7 @@ roslaunch vins_estimator realsense_color.launch use_zero_dce:=true
 
 这会启动 `feature_tracker/scripts/zero_dce_enhancer_node.py`，订阅 `/camera/color/image_raw`，
 发布 `/zero_dce/image_enhanced`，并把 `feature_tracker` 和 `pose_graph` 的图像输入切到增强后的 topic。
+默认使用 `feature_tracker/models/zero_dce_plus_epoch99.pth`，`zero_dce_scale_factor:=12`。
 
 这个 launch 会同时启动：
 
