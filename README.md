@@ -310,6 +310,67 @@ python3 tools/run_ablation_eval.py \
 
 不确定性权重和平面结构约束代码保留为开关，后续需要继续调权重模型或平面匹配策略后再进入默认路径。
 
+## SubSurfaceGeoRobo ZED2 数据运行
+
+`/home/mhenwa/slam/bags/SubSurfaceGeoRobo/02_20m_zed2.bag` 包含 ZED2 左右目 rect 彩色图和 ZED2 IMU，没有直接录制 RGB-D depth。项目中新增了 `zed2_stereo_depth_node.py`，运行时用左右目图像生成对齐到左目的 `mono16` 深度图：
+
+- left image: `/zed_node/left/image_rect_color`
+- right image: `/zed_node/right/image_rect_color`
+- imu: `/zed_node/imu/data`
+- generated depth: `/subsurface_georobo/zed2/depth`
+
+先启动容器：
+
+```bash
+cd /home/mhenwa/slam/VINS-RGBD
+docker run --rm -it --network host \
+  -v /home/mhenwa/slam/VINS-RGBD:/workspace/VINS-RGBD \
+  -v /home/mhenwa/slam/VINS-RGBD/.docker_catkin_ws:/workspace/VINS-RGBD/.docker_catkin_ws \
+  -v /home/mhenwa/slam/bags/SubSurfaceGeoRobo:/bags \
+  -w /workspace/VINS-RGBD \
+  --name vins-rgbd \
+  vins-rgbd:melodic \
+  bash
+```
+
+容器内编译并运行：
+
+```bash
+source /opt/ros/melodic/setup.bash
+cd /workspace/VINS-RGBD/.docker_catkin_ws
+catkin build feature_tracker vins_estimator pose_graph -DCMAKE_BUILD_TYPE=Release
+source devel/setup.bash
+cd /workspace/VINS-RGBD
+
+roslaunch vins_estimator subsurface_georobo.launch
+```
+
+另开一个终端播放 bag：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+rosbag play /bags/02_20m_zed2.bag
+```
+
+可视化：
+
+```bash
+docker exec -it vins-rgbd bash
+source /opt/ros/melodic/setup.bash
+source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
+rviz -d /workspace/VINS-RGBD/config/vins_rviz_config.rviz
+```
+
+烟测结果：短回放 35 秒时，`/subsurface_georobo/zed2/depth`、`/feature_tracker/feature`、`/vins_estimator/odometry` 均有输出；stereo depth 约 `6.7-8.9 Hz`，单帧约 `57-64 ms`，有效深度比例约 `67-79%`。由于这是 SGBM 伪 RGB-D，默认先关闭 `Depth-to-map`，确认轨迹稳定后再用 launch 参数开启：
+
+```bash
+roslaunch vins_estimator subsurface_georobo.launch \
+  use_depth_to_map:=1 \
+  use_depth_to_map_pose_graph:=1
+```
+
 ---
 
 

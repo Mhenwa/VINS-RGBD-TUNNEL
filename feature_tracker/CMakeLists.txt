@@ -62,5 +62,6 @@ endif()
 catkin_install_python(PROGRAMS
     scripts/zero_dce_enhancer_node.py
     scripts/export_zero_dce_plus_onnx.py
+    scripts/zed2_stereo_depth_node.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
