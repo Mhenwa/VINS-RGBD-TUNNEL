@@ -1,5 +1,6 @@
 #include "estimator.h"
 #include <algorithm>
+#include <cmath>
 #include <pcl/kdtree/kdtree_flann.h>
 
 namespace
@@ -11,11 +12,15 @@ struct DepthMapEdge
     Vector4d plane;
     double scale;
     double abs_distance;
+    double quality;
+    double plane_rmse;
 };
 
 bool fitPlane(const std::vector<int> &indices,
               const pcl::PointCloud<pcl::PointXYZ>::Ptr &map_cloud,
-              Vector4d &plane)
+              Vector4d &plane,
+              double &plane_rmse,
+              double &max_abs_distance)
 {
     Vector3d centroid = Vector3d::Zero();
     for (int idx : indices)
@@ -37,7 +42,31 @@ bool fitPlane(const std::vector<int> &indices,
     Vector3d normal = solver.eigenvectors().col(0).normalized();
     plane.head<3>() = normal;
     plane(3) = -normal.dot(centroid);
+    double squared_error = 0.0;
+    max_abs_distance = 0.0;
+    for (int idx : indices)
+    {
+        Vector3d point(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+        double distance = normal.dot(point) + plane(3);
+        double abs_distance = std::abs(distance);
+        squared_error += distance * distance;
+        max_abs_distance = std::max(max_abs_distance, abs_distance);
+    }
+    plane_rmse = std::sqrt(squared_error / static_cast<double>(indices.size()));
     return true;
+}
+
+double depthMapQuality(double depth, double plane_rmse, double abs_distance)
+{
+    if (!DEPTH_MAP_UNCERTAINTY_ENABLE)
+        return 1.0;
+    const double range_ratio = depth / DEPTH_MAP_UNCERTAINTY_RANGE;
+    const double w_range = 1.0 / (1.0 + range_ratio * range_ratio);
+    const double w_plane = std::exp(-plane_rmse / DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
+    const double w_residual = std::exp(-abs_distance / DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
+    const double quality = w_range * w_plane * w_residual;
+    return std::min(DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT,
+                    std::max(DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT, quality));
 }
 
 Vector3d transformCameraPoint(const Vector3d &point_c,
@@ -97,21 +126,12 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
             continue;
 
         Vector4d plane;
-        if (!fitPlane(indices, map_cloud, plane))
+        double plane_rmse = 0.0;
+        double max_plane_abs_dist = 0.0;
+        if (!fitPlane(indices, map_cloud, plane, plane_rmse, max_plane_abs_dist))
             continue;
 
-        bool valid_plane = true;
-        for (int nearest_idx : indices)
-        {
-            const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
-            double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
-            if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
-            {
-                valid_plane = false;
-                break;
-            }
-        }
-        if (!valid_plane)
+        if (max_plane_abs_dist > DEPTH_MAP_PLANE_MAX_DIST)
             continue;
 
         double distance = plane.head<3>().dot(point_w) + plane(3);
@@ -119,6 +139,8 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
         if (range2 < 1e-6)
             continue;
         double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
+        const double quality = depthMapQuality(std::sqrt(range2), plane_rmse, std::abs(distance));
+        scale *= quality;
         if (scale <= DEPTH_MAP_MIN_SCALE)
             continue;
 
@@ -128,6 +150,8 @@ std::vector<DepthMapEdge> buildVioDepthMapEdges(const Estimator &estimator)
         edge.plane = plane;
         edge.scale = scale;
         edge.abs_distance = std::abs(distance);
+        edge.quality = quality;
+        edge.plane_rmse = plane_rmse;
         edges.push_back(edge);
     }
 
@@ -1019,6 +1043,8 @@ void Estimator::optimization()
     {
         ceres::LossFunction *depth_loss = DEPTH_MAP_HUBER > 0 ? new ceres::HuberLoss(DEPTH_MAP_HUBER) : NULL;
         double avg_abs_distance = 0.0;
+        double avg_quality = 0.0;
+        double avg_plane_rmse = 0.0;
         for (const DepthMapEdge &edge : depth_map_edges)
         {
             ceres::CostFunction *depth_factor = DepthToMapFactor::Create(edge.point_c, edge.plane,
@@ -1026,10 +1052,14 @@ void Estimator::optimization()
             problem.AddResidualBlock(depth_factor, depth_loss,
                                      para_Pose[edge.frame_index], para_Ex_Pose[0]);
             avg_abs_distance += edge.abs_distance;
+            avg_quality += edge.quality;
+            avg_plane_rmse += edge.plane_rmse;
         }
         avg_abs_distance /= static_cast<double>(depth_map_edges.size());
-        ROS_INFO_THROTTLE(1.0, "vio depth-to-map edges: %lu avg_abs_dist: %.4f",
-                          depth_map_edges.size(), avg_abs_distance);
+        avg_quality /= static_cast<double>(depth_map_edges.size());
+        avg_plane_rmse /= static_cast<double>(depth_map_edges.size());
+        ROS_INFO_THROTTLE(1.0, "vio depth-to-map edges: %lu avg_abs_dist: %.4f avg_quality: %.3f avg_plane_rmse: %.4f",
+                          depth_map_edges.size(), avg_abs_distance, avg_quality, avg_plane_rmse);
     }
     ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
 

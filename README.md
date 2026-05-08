@@ -196,12 +196,20 @@ rosservice call /pose_graph/save_map
 
 ## 消融评测
 
-自动化脚本会完整跑 `Normal.bag` 和 `darkroom1.bag`，每个 bag 跑 4 组：
+自动化脚本会完整跑 `Normal.bag` 和 `darkroom1.bag`，默认每个 bag 跑 4 组：
 
 - `baseline`：关闭 Zero-DCE++，关闭 Depth-to-map
 - `zero_dce_only`：只开启 Zero-DCE++ ONNX C++
 - `depth_to_map_only`：只开启 Depth-to-map
-- `full`：Zero-DCE++ ONNX C++ 和 Depth-to-map 全部开启
+- `full`：Zero-DCE++ ONNX C++ 和 Depth-to-map 全部开启，新优化开关关闭，用作旧完整系统参考
+
+额外可选的 darkroom 优化消融：
+
+- `uncertainty_only`：在 `full` 基础上开启 Depth-to-map 不确定性权重
+- `planes_only`：在 `full` 基础上开启轻量地面/墙面平面约束
+- `loop_geom_only`：在 `full` 基础上开启回环几何验证
+- `planes_loop`：同时开启平面约束和回环几何验证
+- `full_optimized`：同时开启不确定性权重、平面约束和回环几何验证
 
 完整命令：
 
@@ -226,6 +234,19 @@ python3 tools/run_ablation_eval.py \
   --skip-build \
   --sequence darkroom1 \
   --variant full
+```
+
+只跑 darkroom 优化路线：
+
+```bash
+python3 tools/run_ablation_eval.py \
+  --skip-build \
+  --sequence darkroom1 \
+  --variant full \
+  --variant uncertainty_only \
+  --variant planes_only \
+  --variant loop_geom_only \
+  --variant full_optimized
 ```
 
 每个 variant 会输出：
@@ -270,6 +291,24 @@ python3 tools/run_ablation_eval.py \
 | Seq | Variant | ATE RMSE m | ATE Mean m | ATE Max m | Enhanced Hz | Feature Hz | Odom Hz | Raw->Enh ms | Img->Feat ms | Img->Odom ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | darkroom1 | full + LK FB check | 0.3327 | 0.3026 | 0.6649 | 15.0004 | 10.4840 | 10.5134 | 13.2321 | 9.2473 | 33.9547 |
+
+在此基础上，新增 Depth-to-map 不确定性权重、轻量平面约束、回环几何验证后，针对 `darkroom1.bag` 的测试输出目录为 `output/ablation/darkroom_opt_20260508_160538/`：
+
+| Seq | Variant | ATE RMSE m | ATE Mean m | ATE Max m | Enhanced Hz | Feature Hz | Odom Hz | Raw->Enh ms | Img->Feat ms | Img->Odom ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| darkroom1 | full | 0.3329 | 0.3036 | 0.6949 | 14.9915 | 10.4846 | 10.5159 | 12.7307 | 8.9998 | 32.1090 |
+| darkroom1 | uncertainty_only | 0.3952 | 0.3575 | 0.8249 | 14.9910 | 10.4905 | 10.5232 | 12.3937 | 8.8575 | 30.8096 |
+| darkroom1 | planes_only | 0.3378 | 0.3070 | 0.7471 | 14.9908 | 10.4844 | 10.5137 | 12.5039 | 8.8621 | 271.9199 |
+| darkroom1 | loop_geom_only | 0.3089 | 0.2896 | 0.5486 | 14.9911 | 10.4840 | 10.8662 | 12.4194 | 8.8515 | 110.3107 |
+| darkroom1 | full_optimized | 0.3369 | 0.3048 | 0.6553 | 14.9900 | 10.4838 | 10.5127 | 12.8895 | 9.1779 | 31.9642 |
+
+额外组合 `planes_loop` 输出目录为 `output/ablation/darkroom_planes_loop_20260508_161425/`，ATE RMSE 为 `0.3843 m`，说明当前轻量平面约束与回环几何验证叠加会退化。当前推荐默认配置只开启已验证有效的回环几何验证：
+
+- `loop_geom_verify: 1`
+- `depth_map_uncertainty_enable: 0`
+- `use_structural_planes: 0`
+
+不确定性权重和平面结构约束代码保留为开关，后续需要继续调权重模型或平面匹配策略后再进入默认路径。
 
 ---
 

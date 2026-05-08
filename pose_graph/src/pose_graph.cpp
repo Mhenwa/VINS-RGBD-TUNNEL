@@ -2,6 +2,7 @@
 #include "voxblox_mapper.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 extern float RESOLUTION;
 extern int PCL_FILTER_MIN_DENSITY;
 extern int USE_DEPTH_TO_MAP_POSE_GRAPH;
@@ -15,6 +16,20 @@ extern double DEPTH_MAP_PLANE_MAX_DIST;
 extern double DEPTH_MAP_MIN_SCALE;
 extern int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES;
 extern int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL;
+extern int DEPTH_MAP_UNCERTAINTY_ENABLE;
+extern double DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT;
+extern double DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT;
+extern double DEPTH_MAP_UNCERTAINTY_RANGE;
+extern double DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA;
+extern double DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA;
+extern int USE_STRUCTURAL_PLANES;
+extern double STRUCT_PLANE_NORMAL_MERGE_DEG;
+extern double STRUCT_PLANE_DISTANCE_MERGE;
+extern double STRUCT_PLANE_WEIGHT;
+extern double STRUCT_PLANE_HUBER;
+extern int STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME;
+extern double LOOP_MIN_BOW_SCORE;
+extern double LOOP_CANDIDATE_SCORE;
 extern Eigen::Matrix<double, 3, 1> ti_d;
 extern Eigen::Matrix<double, 3, 3> qi_d;
 
@@ -27,6 +42,16 @@ struct PoseGraphDepthMapEdge
     Vector4d plane;
     double scale;
     double abs_distance;
+    double quality;
+    double plane_rmse;
+};
+
+struct StructuralPlaneEdge
+{
+    int target_local_index;
+    Vector4d plane_d;
+    Vector4d reference_plane_w;
+    double weight;
 };
 
 pcl::PointXYZRGB makeColorPoint(const Vector3d &point_w, const cv::Vec3b &bgr)
@@ -43,7 +68,9 @@ pcl::PointXYZRGB makeColorPoint(const Vector3d &point_w, const cv::Vec3b &bgr)
 
 bool fitPlane(const std::vector<int> &indices,
               const pcl::PointCloud<pcl::PointXYZ>::Ptr &map_cloud,
-              Vector4d &plane)
+              Vector4d &plane,
+              double &plane_rmse,
+              double &max_abs_distance)
 {
     Vector3d centroid = Vector3d::Zero();
     for (int idx : indices)
@@ -65,12 +92,124 @@ bool fitPlane(const std::vector<int> &indices,
     Vector3d normal = solver.eigenvectors().col(0).normalized();
     plane.head<3>() = normal;
     plane(3) = -normal.dot(centroid);
+    double squared_error = 0.0;
+    max_abs_distance = 0.0;
+    for (int idx : indices)
+    {
+        Vector3d point(map_cloud->points[idx].x, map_cloud->points[idx].y, map_cloud->points[idx].z);
+        double distance = normal.dot(point) + plane(3);
+        double abs_distance = std::abs(distance);
+        squared_error += distance * distance;
+        max_abs_distance = std::max(max_abs_distance, abs_distance);
+    }
+    plane_rmse = std::sqrt(squared_error / static_cast<double>(indices.size()));
     return true;
+}
+
+double depthMapQuality(double depth, double plane_rmse, double abs_distance)
+{
+    if (!DEPTH_MAP_UNCERTAINTY_ENABLE)
+        return 1.0;
+    const double range_ratio = depth / DEPTH_MAP_UNCERTAINTY_RANGE;
+    const double w_range = 1.0 / (1.0 + range_ratio * range_ratio);
+    const double w_plane = std::exp(-plane_rmse / DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
+    const double w_residual = std::exp(-abs_distance / DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
+    const double quality = w_range * w_plane * w_residual;
+    return std::min(DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT,
+                    std::max(DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT, quality));
 }
 
 Vector3d transformDepthPoint(const Vector3d &point_c, const Matrix3d &R_w_i, const Vector3d &P_w_i)
 {
     return R_w_i * (qi_d * point_c + ti_d) + P_w_i;
+}
+
+Vector4d transformDepthPlane(const Vector4d &plane_d, const Matrix3d &R_w_i, const Vector3d &P_w_i)
+{
+    Vector3d normal_w = (R_w_i * qi_d * plane_d.head<3>()).normalized();
+    const Vector3d depth_origin_w = R_w_i * ti_d + P_w_i;
+    Vector4d plane_w;
+    plane_w.head<3>() = normal_w;
+    plane_w(3) = plane_d(3) - normal_w.dot(depth_origin_w);
+    return plane_w;
+}
+
+std::vector<StructuralPlaneEdge> buildStructuralPlaneEdges(const std::vector<KeyFrame*> &keyframes,
+                                                           const Quaterniond *q_array,
+                                                           double (*t_array)[3])
+{
+    std::vector<StructuralPlaneEdge> edges;
+    if (!USE_STRUCTURAL_PLANES || keyframes.size() < 2)
+        return edges;
+
+    const int target_count = std::min<int>(std::max(1, DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES),
+                                           static_cast<int>(keyframes.size()) - 1);
+    const int first_target = static_cast<int>(keyframes.size()) - target_count;
+    const double cos_normal_threshold = std::cos(STRUCT_PLANE_NORMAL_MERGE_DEG * M_PI / 180.0);
+    for (int target = std::max(1, first_target); target < static_cast<int>(keyframes.size()); ++target)
+    {
+        if (keyframes[target]->structural_planes.empty())
+            continue;
+        const Matrix3d target_R_w_i = q_array[target].toRotationMatrix();
+        const Vector3d target_P_w_i(t_array[target][0], t_array[target][1], t_array[target][2]);
+        int target_edges = 0;
+        for (const StructuralPlane &target_plane : keyframes[target]->structural_planes)
+        {
+            Vector4d target_plane_w = transformDepthPlane(target_plane.plane_d, target_R_w_i, target_P_w_i);
+            double best_score = std::numeric_limits<double>::max();
+            Vector4d best_reference = Vector4d::Zero();
+            bool found_match = false;
+
+            for (int frame = 0; frame < target; ++frame)
+            {
+                if (keyframes[frame]->sequence != keyframes[target]->sequence)
+                    continue;
+                if (keyframes[frame]->structural_planes.empty())
+                    continue;
+                const Matrix3d ref_R_w_i = q_array[frame].toRotationMatrix();
+                const Vector3d ref_P_w_i(t_array[frame][0], t_array[frame][1], t_array[frame][2]);
+                for (const StructuralPlane &ref_plane : keyframes[frame]->structural_planes)
+                {
+                    if (ref_plane.type != target_plane.type)
+                        continue;
+                    Vector4d ref_plane_w = transformDepthPlane(ref_plane.plane_d, ref_R_w_i, ref_P_w_i);
+                    double normal_dot = target_plane_w.head<3>().dot(ref_plane_w.head<3>());
+                    if (normal_dot < 0.0)
+                    {
+                        ref_plane_w = -ref_plane_w;
+                        normal_dot = -normal_dot;
+                    }
+                    if (normal_dot < cos_normal_threshold)
+                        continue;
+                    const double distance_diff = std::abs(target_plane_w(3) - ref_plane_w(3));
+                    if (distance_diff > STRUCT_PLANE_DISTANCE_MERGE)
+                        continue;
+                    const double score = distance_diff + 0.1 * (1.0 - normal_dot);
+                    if (score < best_score)
+                    {
+                        best_score = score;
+                        best_reference = ref_plane_w;
+                        found_match = true;
+                    }
+                }
+            }
+
+            if (!found_match)
+                continue;
+            StructuralPlaneEdge edge;
+            edge.target_local_index = target;
+            edge.plane_d = target_plane.plane_d;
+            if (target_plane_w.head<3>().dot(best_reference.head<3>()) < 0.0)
+                edge.plane_d = -edge.plane_d;
+            edge.reference_plane_w = best_reference;
+            edge.weight = target_plane.weight;
+            edges.push_back(edge);
+            ++target_edges;
+            if (target_edges >= STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME)
+                break;
+        }
+    }
+    return edges;
 }
 
 std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector<KeyFrame*> &keyframes,
@@ -134,21 +273,12 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
                 continue;
 
             Vector4d plane;
-            if (!fitPlane(indices, map_cloud, plane))
+            double plane_rmse = 0.0;
+            double max_plane_abs_dist = 0.0;
+            if (!fitPlane(indices, map_cloud, plane, plane_rmse, max_plane_abs_dist))
                 continue;
 
-            bool valid_plane = true;
-            for (int nearest_idx : indices)
-            {
-                const pcl::PointXYZ &nearest = map_cloud->points[nearest_idx];
-                double plane_distance = plane.head<3>().dot(Vector3d(nearest.x, nearest.y, nearest.z)) + plane(3);
-                if (std::abs(plane_distance) > DEPTH_MAP_PLANE_MAX_DIST)
-                {
-                    valid_plane = false;
-                    break;
-                }
-            }
-            if (!valid_plane)
+            if (max_plane_abs_dist > DEPTH_MAP_PLANE_MAX_DIST)
                 continue;
 
             double distance = plane.head<3>().dot(point_w) + plane(3);
@@ -156,6 +286,8 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
             if (range2 < 1e-6)
                 continue;
             double scale = 1.0 - 0.9 * std::abs(distance) / std::sqrt(std::sqrt(range2));
+            const double quality = depthMapQuality(std::sqrt(range2), plane_rmse, std::abs(distance));
+            scale *= quality;
             if (scale <= DEPTH_MAP_MIN_SCALE)
                 continue;
 
@@ -165,6 +297,8 @@ std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector
             edge.plane = plane;
             edge.scale = scale;
             edge.abs_distance = std::abs(distance);
+            edge.quality = quality;
+            edge.plane_rmse = plane_rmse;
             frame_edges.push_back(edge);
         }
 
@@ -617,12 +751,12 @@ int PoseGraph::detectLoop(KeyFrame* keyframe, int frame_index)
         }
     }
     // a good match with its nerghbour
-    if (ret.size() >= 1 &&ret[0].Score > 0.05)
+    if (ret.size() >= 1 && ret[0].Score > LOOP_MIN_BOW_SCORE)
     {
         for (unsigned int i = 1; i < ret.size(); i++)
         {
             //if (ret[i].Score > ret[0].Score * 0.3)
-            if (ret[i].Score > 0.015)
+            if (ret[i].Score > LOOP_CANDIDATE_SCORE)
             {
                 find_loop = true;
                 int tmp_index = ret[i].Id;
@@ -651,8 +785,10 @@ int PoseGraph::detectLoop(KeyFrame* keyframe, int frame_index)
         int min_index = -1;
         for (unsigned int i = 0; i < ret.size(); i++)
         {
-            if (min_index == -1 || (ret[i].Id < min_index && ret[i].Score > 0.015))
-                min_index = ret[i].Id;
+            const int candidate_id = static_cast<int>(ret[i].Id);
+            if (ret[i].Score > LOOP_CANDIDATE_SCORE &&
+                (min_index == -1 || candidate_id < min_index))
+                min_index = candidate_id;
         }
         return min_index;
     }
@@ -810,6 +946,8 @@ void PoseGraph::optimize4DoF()
             {
                 ceres::LossFunction *depth_loss = DEPTH_MAP_HUBER > 0 ? new ceres::HuberLoss(DEPTH_MAP_HUBER) : NULL;
                 double avg_abs_distance = 0.0;
+                double avg_quality = 0.0;
+                double avg_plane_rmse = 0.0;
                 for (const PoseGraphDepthMapEdge &edge : depth_edges)
                 {
                     int target_index = edge.target_local_index;
@@ -820,10 +958,31 @@ void PoseGraph::optimize4DoF()
                                              euler_array[target_index],
                                              t_array[target_index]);
                     avg_abs_distance += edge.abs_distance;
+                    avg_quality += edge.quality;
+                    avg_plane_rmse += edge.plane_rmse;
                 }
                 avg_abs_distance /= static_cast<double>(depth_edges.size());
-                ROS_INFO("pose graph depth-to-map edges: %lu avg_abs_dist: %.4f",
-                         depth_edges.size(), avg_abs_distance);
+                avg_quality /= static_cast<double>(depth_edges.size());
+                avg_plane_rmse /= static_cast<double>(depth_edges.size());
+                ROS_INFO("pose graph depth-to-map edges: %lu avg_abs_dist: %.4f avg_quality: %.3f avg_plane_rmse: %.4f",
+                         depth_edges.size(), avg_abs_distance, avg_quality, avg_plane_rmse);
+            }
+            std::vector<StructuralPlaneEdge> plane_edges =
+                buildStructuralPlaneEdges(optimized_keyframes, q_array, t_array);
+            if (!plane_edges.empty())
+            {
+                ceres::LossFunction *plane_loss = STRUCT_PLANE_HUBER > 0 ? new ceres::HuberLoss(STRUCT_PLANE_HUBER) : NULL;
+                for (const StructuralPlaneEdge &edge : plane_edges)
+                {
+                    const int target_index = edge.target_local_index;
+                    ceres::CostFunction* cost_function = StructuralPlaneFourDOFError::Create(
+                        edge.plane_d, edge.reference_plane_w, edge.weight,
+                        euler_array[target_index][1], euler_array[target_index][2], qi_d, ti_d);
+                    problem.AddResidualBlock(cost_function, plane_loss,
+                                             euler_array[target_index],
+                                             t_array[target_index]);
+                }
+                ROS_INFO("pose graph structural plane edges: %lu", plane_edges.size());
             }
             m_keyframelist.unlock();
 

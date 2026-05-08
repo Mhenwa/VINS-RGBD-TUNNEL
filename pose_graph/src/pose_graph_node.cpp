@@ -87,6 +87,35 @@ double DEPTH_MAP_PLANE_MAX_DIST = 0.2;
 double DEPTH_MAP_MIN_SCALE = 0.1;
 int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 5;
 int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 10;
+int DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+double DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.20;
+double DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = 1.00;
+double DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+double DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+double DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
+int USE_STRUCTURAL_PLANES = 0;
+int STRUCT_PLANE_MIN_INLIERS = 120;
+double STRUCT_PLANE_DISTANCE_THRESHOLD = 0.04;
+double STRUCT_PLANE_NORMAL_MERGE_DEG = 10.0;
+double STRUCT_PLANE_DISTANCE_MERGE = 0.25;
+double STRUCT_PLANE_WEIGHT = 30.0;
+double STRUCT_PLANE_HUBER = 0.10;
+int STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = 3;
+int STRUCT_PLANE_ENABLE_GROUND = 1;
+int STRUCT_PLANE_ENABLE_WALLS = 1;
+int LOOP_GEOM_VERIFY = 1;
+double LOOP_MIN_BOW_SCORE = 0.05;
+double LOOP_CANDIDATE_SCORE = 0.015;
+int LOOP_ENABLE_FUNDAMENTAL_CHECK = 1;
+double LOOP_FUNDAMENTAL_THRESHOLD_PX = 2.0;
+int LOOP_MIN_PNP_INLIERS = 35;
+double LOOP_MIN_INLIER_RATIO = 0.30;
+double LOOP_MAX_YAW_DEG = 25.0;
+double LOOP_MAX_TRANSLATION_M = 12.0;
+int LOOP_TEASER_ENABLE = 1;
+double LOOP_TEASER_NOISE_BOUND = 0.10;
+int LOOP_TEASER_MIN_INLIERS = 30;
+double LOOP_TEASER_MAX_RMSE = 0.20;
 
 
 camodocal::CameraPtr m_camera;
@@ -890,6 +919,64 @@ int main(int argc, char **argv)
             DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = fsSettings["depth_map_pose_graph_target_keyframes"];
         if (!fsSettings["depth_map_pose_graph_opt_interval"].empty())
             DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = fsSettings["depth_map_pose_graph_opt_interval"];
+        if (!fsSettings["depth_map_uncertainty_enable"].empty())
+            DEPTH_MAP_UNCERTAINTY_ENABLE = fsSettings["depth_map_uncertainty_enable"];
+        if (!fsSettings["depth_map_uncertainty_min_weight"].empty())
+            DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = fsSettings["depth_map_uncertainty_min_weight"];
+        if (!fsSettings["depth_map_uncertainty_max_weight"].empty())
+            DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = fsSettings["depth_map_uncertainty_max_weight"];
+        if (!fsSettings["depth_map_uncertainty_range"].empty())
+            DEPTH_MAP_UNCERTAINTY_RANGE = fsSettings["depth_map_uncertainty_range"];
+        if (!fsSettings["depth_map_uncertainty_plane_sigma"].empty())
+            DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = fsSettings["depth_map_uncertainty_plane_sigma"];
+        if (!fsSettings["depth_map_uncertainty_residual_sigma"].empty())
+            DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = fsSettings["depth_map_uncertainty_residual_sigma"];
+        if (!fsSettings["use_structural_planes"].empty())
+            USE_STRUCTURAL_PLANES = fsSettings["use_structural_planes"];
+        if (!fsSettings["struct_plane_min_inliers"].empty())
+            STRUCT_PLANE_MIN_INLIERS = fsSettings["struct_plane_min_inliers"];
+        if (!fsSettings["struct_plane_distance_threshold"].empty())
+            STRUCT_PLANE_DISTANCE_THRESHOLD = fsSettings["struct_plane_distance_threshold"];
+        if (!fsSettings["struct_plane_normal_merge_deg"].empty())
+            STRUCT_PLANE_NORMAL_MERGE_DEG = fsSettings["struct_plane_normal_merge_deg"];
+        if (!fsSettings["struct_plane_distance_merge"].empty())
+            STRUCT_PLANE_DISTANCE_MERGE = fsSettings["struct_plane_distance_merge"];
+        if (!fsSettings["struct_plane_weight"].empty())
+            STRUCT_PLANE_WEIGHT = fsSettings["struct_plane_weight"];
+        if (!fsSettings["struct_plane_huber"].empty())
+            STRUCT_PLANE_HUBER = fsSettings["struct_plane_huber"];
+        if (!fsSettings["struct_plane_max_planes_per_keyframe"].empty())
+            STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = fsSettings["struct_plane_max_planes_per_keyframe"];
+        if (!fsSettings["struct_plane_enable_ground"].empty())
+            STRUCT_PLANE_ENABLE_GROUND = fsSettings["struct_plane_enable_ground"];
+        if (!fsSettings["struct_plane_enable_walls"].empty())
+            STRUCT_PLANE_ENABLE_WALLS = fsSettings["struct_plane_enable_walls"];
+        if (!fsSettings["loop_geom_verify"].empty())
+            LOOP_GEOM_VERIFY = fsSettings["loop_geom_verify"];
+        if (!fsSettings["loop_min_bow_score"].empty())
+            LOOP_MIN_BOW_SCORE = fsSettings["loop_min_bow_score"];
+        if (!fsSettings["loop_candidate_score"].empty())
+            LOOP_CANDIDATE_SCORE = fsSettings["loop_candidate_score"];
+        if (!fsSettings["loop_enable_fundamental_check"].empty())
+            LOOP_ENABLE_FUNDAMENTAL_CHECK = fsSettings["loop_enable_fundamental_check"];
+        if (!fsSettings["loop_fundamental_threshold_px"].empty())
+            LOOP_FUNDAMENTAL_THRESHOLD_PX = fsSettings["loop_fundamental_threshold_px"];
+        if (!fsSettings["loop_min_pnp_inliers"].empty())
+            LOOP_MIN_PNP_INLIERS = fsSettings["loop_min_pnp_inliers"];
+        if (!fsSettings["loop_min_inlier_ratio"].empty())
+            LOOP_MIN_INLIER_RATIO = fsSettings["loop_min_inlier_ratio"];
+        if (!fsSettings["loop_max_yaw_deg"].empty())
+            LOOP_MAX_YAW_DEG = fsSettings["loop_max_yaw_deg"];
+        if (!fsSettings["loop_max_translation_m"].empty())
+            LOOP_MAX_TRANSLATION_M = fsSettings["loop_max_translation_m"];
+        if (!fsSettings["loop_teaser_enable"].empty())
+            LOOP_TEASER_ENABLE = fsSettings["loop_teaser_enable"];
+        if (!fsSettings["loop_teaser_noise_bound"].empty())
+            LOOP_TEASER_NOISE_BOUND = fsSettings["loop_teaser_noise_bound"];
+        if (!fsSettings["loop_teaser_min_inliers"].empty())
+            LOOP_TEASER_MIN_INLIERS = fsSettings["loop_teaser_min_inliers"];
+        if (!fsSettings["loop_teaser_max_rmse"].empty())
+            LOOP_TEASER_MAX_RMSE = fsSettings["loop_teaser_max_rmse"];
 
         readOptionalRosParam(n, "use_depth_to_map_pose_graph", USE_DEPTH_TO_MAP_POSE_GRAPH);
         readOptionalRosParam(n, "depth_map_weight", DEPTH_MAP_WEIGHT);
@@ -902,6 +989,35 @@ int main(int argc, char **argv)
         readOptionalRosParam(n, "depth_map_min_scale", DEPTH_MAP_MIN_SCALE);
         readOptionalRosParam(n, "depth_map_pose_graph_target_keyframes", DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES);
         readOptionalRosParam(n, "depth_map_pose_graph_opt_interval", DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL);
+        readOptionalRosParam(n, "depth_map_uncertainty_enable", DEPTH_MAP_UNCERTAINTY_ENABLE);
+        readOptionalRosParam(n, "depth_map_uncertainty_min_weight", DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT);
+        readOptionalRosParam(n, "depth_map_uncertainty_max_weight", DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT);
+        readOptionalRosParam(n, "depth_map_uncertainty_range", DEPTH_MAP_UNCERTAINTY_RANGE);
+        readOptionalRosParam(n, "depth_map_uncertainty_plane_sigma", DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
+        readOptionalRosParam(n, "depth_map_uncertainty_residual_sigma", DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
+        readOptionalRosParam(n, "use_structural_planes", USE_STRUCTURAL_PLANES);
+        readOptionalRosParam(n, "struct_plane_min_inliers", STRUCT_PLANE_MIN_INLIERS);
+        readOptionalRosParam(n, "struct_plane_distance_threshold", STRUCT_PLANE_DISTANCE_THRESHOLD);
+        readOptionalRosParam(n, "struct_plane_normal_merge_deg", STRUCT_PLANE_NORMAL_MERGE_DEG);
+        readOptionalRosParam(n, "struct_plane_distance_merge", STRUCT_PLANE_DISTANCE_MERGE);
+        readOptionalRosParam(n, "struct_plane_weight", STRUCT_PLANE_WEIGHT);
+        readOptionalRosParam(n, "struct_plane_huber", STRUCT_PLANE_HUBER);
+        readOptionalRosParam(n, "struct_plane_max_planes_per_keyframe", STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME);
+        readOptionalRosParam(n, "struct_plane_enable_ground", STRUCT_PLANE_ENABLE_GROUND);
+        readOptionalRosParam(n, "struct_plane_enable_walls", STRUCT_PLANE_ENABLE_WALLS);
+        readOptionalRosParam(n, "loop_geom_verify", LOOP_GEOM_VERIFY);
+        readOptionalRosParam(n, "loop_min_bow_score", LOOP_MIN_BOW_SCORE);
+        readOptionalRosParam(n, "loop_candidate_score", LOOP_CANDIDATE_SCORE);
+        readOptionalRosParam(n, "loop_enable_fundamental_check", LOOP_ENABLE_FUNDAMENTAL_CHECK);
+        readOptionalRosParam(n, "loop_fundamental_threshold_px", LOOP_FUNDAMENTAL_THRESHOLD_PX);
+        readOptionalRosParam(n, "loop_min_pnp_inliers", LOOP_MIN_PNP_INLIERS);
+        readOptionalRosParam(n, "loop_min_inlier_ratio", LOOP_MIN_INLIER_RATIO);
+        readOptionalRosParam(n, "loop_max_yaw_deg", LOOP_MAX_YAW_DEG);
+        readOptionalRosParam(n, "loop_max_translation_m", LOOP_MAX_TRANSLATION_M);
+        readOptionalRosParam(n, "loop_teaser_enable", LOOP_TEASER_ENABLE);
+        readOptionalRosParam(n, "loop_teaser_noise_bound", LOOP_TEASER_NOISE_BOUND);
+        readOptionalRosParam(n, "loop_teaser_min_inliers", LOOP_TEASER_MIN_INLIERS);
+        readOptionalRosParam(n, "loop_teaser_max_rmse", LOOP_TEASER_MAX_RMSE);
 
         if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
             DEPTH_MAP_NEIGHBOR_COUNT = 3;
@@ -919,14 +1035,57 @@ int main(int argc, char **argv)
             DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 1;
         if (DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL < 0)
             DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 0;
+        if (DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT < 0.0)
+            DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.0;
+        if (DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT < DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT)
+            DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT;
+        if (DEPTH_MAP_UNCERTAINTY_RANGE <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+        if (DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+        if (DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
+        if (STRUCT_PLANE_MIN_INLIERS < 3)
+            STRUCT_PLANE_MIN_INLIERS = 3;
+        if (STRUCT_PLANE_DISTANCE_THRESHOLD <= 0.0)
+            STRUCT_PLANE_DISTANCE_THRESHOLD = 0.04;
+        if (STRUCT_PLANE_NORMAL_MERGE_DEG <= 0.0)
+            STRUCT_PLANE_NORMAL_MERGE_DEG = 10.0;
+        if (STRUCT_PLANE_DISTANCE_MERGE <= 0.0)
+            STRUCT_PLANE_DISTANCE_MERGE = 0.25;
+        if (STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME < 1)
+            STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = 1;
+        if (LOOP_FUNDAMENTAL_THRESHOLD_PX <= 0.0)
+            LOOP_FUNDAMENTAL_THRESHOLD_PX = 2.0;
+        if (LOOP_MIN_PNP_INLIERS < MIN_LOOP_NUM)
+            LOOP_MIN_PNP_INLIERS = MIN_LOOP_NUM;
+        if (LOOP_MIN_INLIER_RATIO < 0.0)
+            LOOP_MIN_INLIER_RATIO = 0.0;
+        if (LOOP_MAX_YAW_DEG <= 0.0)
+            LOOP_MAX_YAW_DEG = 25.0;
+        if (LOOP_MAX_TRANSLATION_M <= 0.0)
+            LOOP_MAX_TRANSLATION_M = 12.0;
 
-        ROS_INFO("depth-to-map pose graph: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f target_kfs: %d opt_interval: %d",
+        ROS_INFO("depth-to-map pose graph: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f target_kfs: %d opt_interval: %d uncertainty: %d [%.2f, %.2f]",
                  USE_DEPTH_TO_MAP_POSE_GRAPH, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
                  DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME,
                  DEPTH_MAP_NEIGHBOR_COUNT, DEPTH_MAP_MAX_NEIGHBOR_DIST,
                  DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE,
                  DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES,
-                 DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL);
+                 DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL,
+                 DEPTH_MAP_UNCERTAINTY_ENABLE, DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT,
+                 DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT);
+        ROS_INFO("structural planes: %d min_inliers: %d dist: %.3f normal_deg: %.2f merge_dist: %.3f weight: %.2f huber: %.3f max_per_kf: %d ground/walls: %d/%d",
+                 USE_STRUCTURAL_PLANES, STRUCT_PLANE_MIN_INLIERS,
+                 STRUCT_PLANE_DISTANCE_THRESHOLD, STRUCT_PLANE_NORMAL_MERGE_DEG,
+                 STRUCT_PLANE_DISTANCE_MERGE, STRUCT_PLANE_WEIGHT, STRUCT_PLANE_HUBER,
+                 STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME, STRUCT_PLANE_ENABLE_GROUND,
+                 STRUCT_PLANE_ENABLE_WALLS);
+        ROS_INFO("loop geometry verify: %d bow/cand: %.3f/%.3f F: %d thr_px: %.2f pnp_inliers: %d ratio: %.2f yaw: %.1f trans: %.1f teaser_req: %d",
+                 LOOP_GEOM_VERIFY, LOOP_MIN_BOW_SCORE, LOOP_CANDIDATE_SCORE,
+                 LOOP_ENABLE_FUNDAMENTAL_CHECK, LOOP_FUNDAMENTAL_THRESHOLD_PX,
+                 LOOP_MIN_PNP_INLIERS, LOOP_MIN_INLIER_RATIO,
+                 LOOP_MAX_YAW_DEG, LOOP_MAX_TRANSLATION_M, LOOP_TEASER_ENABLE);
         //OctreePointCloudDensity has no ::Ptr
         posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());

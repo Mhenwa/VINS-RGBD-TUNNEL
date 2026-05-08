@@ -32,6 +32,12 @@ int DEPTH_MAP_NEIGHBOR_COUNT = 5;
 double DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
 double DEPTH_MAP_PLANE_MAX_DIST = 0.2;
 double DEPTH_MAP_MIN_SCALE = 0.1;
+int DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+double DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.20;
+double DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = 1.00;
+double DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+double DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+double DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
 double DEPTH_CLOUD_SYNC_TOL = 0.02;
 
 template <typename T>
@@ -169,6 +175,18 @@ void readParameters(ros::NodeHandle &n)
         DEPTH_MAP_PLANE_MAX_DIST = fsSettings["depth_map_plane_max_dist"];
     if (!fsSettings["depth_map_min_scale"].empty())
         DEPTH_MAP_MIN_SCALE = fsSettings["depth_map_min_scale"];
+    if (!fsSettings["depth_map_uncertainty_enable"].empty())
+        DEPTH_MAP_UNCERTAINTY_ENABLE = fsSettings["depth_map_uncertainty_enable"];
+    if (!fsSettings["depth_map_uncertainty_min_weight"].empty())
+        DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = fsSettings["depth_map_uncertainty_min_weight"];
+    if (!fsSettings["depth_map_uncertainty_max_weight"].empty())
+        DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = fsSettings["depth_map_uncertainty_max_weight"];
+    if (!fsSettings["depth_map_uncertainty_range"].empty())
+        DEPTH_MAP_UNCERTAINTY_RANGE = fsSettings["depth_map_uncertainty_range"];
+    if (!fsSettings["depth_map_uncertainty_plane_sigma"].empty())
+        DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = fsSettings["depth_map_uncertainty_plane_sigma"];
+    if (!fsSettings["depth_map_uncertainty_residual_sigma"].empty())
+        DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = fsSettings["depth_map_uncertainty_residual_sigma"];
     if (!fsSettings["depth_map_rebuild_each_iteration"].empty())
         DEPTH_MAP_REBUILD_EACH_ITERATION = fsSettings["depth_map_rebuild_each_iteration"];
     if (!fsSettings["depth_cloud_sync_tol"].empty())
@@ -183,6 +201,12 @@ void readParameters(ros::NodeHandle &n)
     readOptionalRosParam(n, "depth_map_max_neighbor_dist", DEPTH_MAP_MAX_NEIGHBOR_DIST);
     readOptionalRosParam(n, "depth_map_plane_max_dist", DEPTH_MAP_PLANE_MAX_DIST);
     readOptionalRosParam(n, "depth_map_min_scale", DEPTH_MAP_MIN_SCALE);
+    readOptionalRosParam(n, "depth_map_uncertainty_enable", DEPTH_MAP_UNCERTAINTY_ENABLE);
+    readOptionalRosParam(n, "depth_map_uncertainty_min_weight", DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT);
+    readOptionalRosParam(n, "depth_map_uncertainty_max_weight", DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT);
+    readOptionalRosParam(n, "depth_map_uncertainty_range", DEPTH_MAP_UNCERTAINTY_RANGE);
+    readOptionalRosParam(n, "depth_map_uncertainty_plane_sigma", DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
+    readOptionalRosParam(n, "depth_map_uncertainty_residual_sigma", DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
     readOptionalRosParam(n, "depth_cloud_sync_tol", DEPTH_CLOUD_SYNC_TOL);
 
     if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
@@ -197,12 +221,25 @@ void readParameters(ros::NodeHandle &n)
         DEPTH_MAP_PLANE_MAX_DIST = 0.2;
     if (DEPTH_MAP_MIN_SCALE < 0.0)
         DEPTH_MAP_MIN_SCALE = 0.0;
+    if (DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT < 0.0)
+        DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.0;
+    if (DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT < DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT)
+        DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT;
+    if (DEPTH_MAP_UNCERTAINTY_RANGE <= 0.0)
+        DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+    if (DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA <= 0.0)
+        DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+    if (DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA <= 0.0)
+        DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
 
-    ROS_INFO("depth-to-map vio: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f sync_tol: %.3f",
+    ROS_INFO("depth-to-map vio: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f sync_tol: %.3f uncertainty: %d [%.2f, %.2f] range: %.2f plane_sigma: %.3f residual_sigma: %.3f",
              USE_DEPTH_TO_MAP, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
              DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME,
              DEPTH_MAP_NEIGHBOR_COUNT, DEPTH_MAP_MAX_NEIGHBOR_DIST,
-             DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE, DEPTH_CLOUD_SYNC_TOL);
+             DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE, DEPTH_CLOUD_SYNC_TOL,
+             DEPTH_MAP_UNCERTAINTY_ENABLE, DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT,
+             DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT, DEPTH_MAP_UNCERTAINTY_RANGE,
+             DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA, DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
     
     fsSettings.release();
 }

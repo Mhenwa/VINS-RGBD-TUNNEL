@@ -46,9 +46,35 @@
     <arg name="depth_map_max_neighbor_dist" default="1.0" />
     <arg name="depth_map_plane_max_dist" default="0.2" />
     <arg name="depth_map_min_scale" default="0.1" />
+    <arg name="depth_map_uncertainty_enable" default="0" />
+    <arg name="depth_map_uncertainty_min_weight" default="0.20" />
+    <arg name="depth_map_uncertainty_max_weight" default="1.00" />
+    <arg name="depth_map_uncertainty_range" default="4.0" />
+    <arg name="depth_map_uncertainty_plane_sigma" default="0.05" />
+    <arg name="depth_map_uncertainty_residual_sigma" default="0.10" />
     <arg name="depth_map_pose_graph_target_keyframes" default="5" />
     <arg name="depth_map_pose_graph_opt_interval" default="10" />
     <arg name="depth_cloud_sync_tol" default="0.02" />
+    <arg name="use_structural_planes" default="0" />
+    <arg name="struct_plane_min_inliers" default="120" />
+    <arg name="struct_plane_distance_threshold" default="0.04" />
+    <arg name="struct_plane_normal_merge_deg" default="10.0" />
+    <arg name="struct_plane_distance_merge" default="0.25" />
+    <arg name="struct_plane_weight" default="30.0" />
+    <arg name="struct_plane_huber" default="0.10" />
+    <arg name="struct_plane_max_planes_per_keyframe" default="3" />
+    <arg name="struct_plane_enable_ground" default="1" />
+    <arg name="struct_plane_enable_walls" default="1" />
+    <arg name="loop_geom_verify" default="1" />
+    <arg name="loop_min_bow_score" default="0.05" />
+    <arg name="loop_candidate_score" default="0.015" />
+    <arg name="loop_enable_fundamental_check" default="1" />
+    <arg name="loop_fundamental_threshold_px" default="2.0" />
+    <arg name="loop_min_pnp_inliers" default="35" />
+    <arg name="loop_min_inlier_ratio" default="0.30" />
+    <arg name="loop_max_yaw_deg" default="25.0" />
+    <arg name="loop_max_translation_m" default="12.0" />
+    <arg name="loop_teaser_enable" default="1" />
     
     <node name="feature_tracker" pkg="feature_tracker" type="feature_tracker" output="screen">
         <param name="config_file" type="string" value="$(arg config_path)" />
@@ -69,6 +95,12 @@
        <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
        <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
        <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+       <param name="depth_map_uncertainty_enable" type="int" value="$(arg depth_map_uncertainty_enable)" />
+       <param name="depth_map_uncertainty_min_weight" type="double" value="$(arg depth_map_uncertainty_min_weight)" />
+       <param name="depth_map_uncertainty_max_weight" type="double" value="$(arg depth_map_uncertainty_max_weight)" />
+       <param name="depth_map_uncertainty_range" type="double" value="$(arg depth_map_uncertainty_range)" />
+       <param name="depth_map_uncertainty_plane_sigma" type="double" value="$(arg depth_map_uncertainty_plane_sigma)" />
+       <param name="depth_map_uncertainty_residual_sigma" type="double" value="$(arg depth_map_uncertainty_residual_sigma)" />
        <param name="depth_cloud_sync_tol" type="double" value="$(arg depth_cloud_sync_tol)" />
     </node>
 
@@ -89,8 +121,34 @@
         <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
         <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
         <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+        <param name="depth_map_uncertainty_enable" type="int" value="$(arg depth_map_uncertainty_enable)" />
+        <param name="depth_map_uncertainty_min_weight" type="double" value="$(arg depth_map_uncertainty_min_weight)" />
+        <param name="depth_map_uncertainty_max_weight" type="double" value="$(arg depth_map_uncertainty_max_weight)" />
+        <param name="depth_map_uncertainty_range" type="double" value="$(arg depth_map_uncertainty_range)" />
+        <param name="depth_map_uncertainty_plane_sigma" type="double" value="$(arg depth_map_uncertainty_plane_sigma)" />
+        <param name="depth_map_uncertainty_residual_sigma" type="double" value="$(arg depth_map_uncertainty_residual_sigma)" />
         <param name="depth_map_pose_graph_target_keyframes" type="int" value="$(arg depth_map_pose_graph_target_keyframes)" />
         <param name="depth_map_pose_graph_opt_interval" type="int" value="$(arg depth_map_pose_graph_opt_interval)" />
+        <param name="use_structural_planes" type="int" value="$(arg use_structural_planes)" />
+        <param name="struct_plane_min_inliers" type="int" value="$(arg struct_plane_min_inliers)" />
+        <param name="struct_plane_distance_threshold" type="double" value="$(arg struct_plane_distance_threshold)" />
+        <param name="struct_plane_normal_merge_deg" type="double" value="$(arg struct_plane_normal_merge_deg)" />
+        <param name="struct_plane_distance_merge" type="double" value="$(arg struct_plane_distance_merge)" />
+        <param name="struct_plane_weight" type="double" value="$(arg struct_plane_weight)" />
+        <param name="struct_plane_huber" type="double" value="$(arg struct_plane_huber)" />
+        <param name="struct_plane_max_planes_per_keyframe" type="int" value="$(arg struct_plane_max_planes_per_keyframe)" />
+        <param name="struct_plane_enable_ground" type="int" value="$(arg struct_plane_enable_ground)" />
+        <param name="struct_plane_enable_walls" type="int" value="$(arg struct_plane_enable_walls)" />
+        <param name="loop_geom_verify" type="int" value="$(arg loop_geom_verify)" />
+        <param name="loop_min_bow_score" type="double" value="$(arg loop_min_bow_score)" />
+        <param name="loop_candidate_score" type="double" value="$(arg loop_candidate_score)" />
+        <param name="loop_enable_fundamental_check" type="int" value="$(arg loop_enable_fundamental_check)" />
+        <param name="loop_fundamental_threshold_px" type="double" value="$(arg loop_fundamental_threshold_px)" />
+        <param name="loop_min_pnp_inliers" type="int" value="$(arg loop_min_pnp_inliers)" />
+        <param name="loop_min_inlier_ratio" type="double" value="$(arg loop_min_inlier_ratio)" />
+        <param name="loop_max_yaw_deg" type="double" value="$(arg loop_max_yaw_deg)" />
+        <param name="loop_max_translation_m" type="double" value="$(arg loop_max_translation_m)" />
+        <param name="loop_teaser_enable" type="int" value="$(arg loop_teaser_enable)" />
     </node>
 
 </launch>

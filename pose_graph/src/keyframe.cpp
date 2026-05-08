@@ -1,4 +1,11 @@
 #include "keyframe.h"
+#include <algorithm>
+#include <cmath>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
 
 template <typename Derived>
 static void reduceVector(vector<Derived> &v, vector<uchar> status)
@@ -34,6 +41,7 @@ KeyFrame::KeyFrame(double _time_stamp, int _index, Vector3d &_vio_T_w_i, Matrix3
 	point_3d_depth_color = _point_3d_depth_color;
 	point_3d_depth_color_raw = _point_3d_depth_color;
 	point_id = _point_id;
+	computeStructuralPlanes();
 	has_loop = false;
 	loop_index = -1;
 	has_fast_point = false;
@@ -75,6 +83,103 @@ KeyFrame::KeyFrame(double _time_stamp, int _index, Vector3d &_vio_T_w_i, Matrix3
 	keypoints = _keypoints;
 	keypoints_norm = _keypoints_norm;
 	brief_descriptors = _brief_descriptors;
+}
+
+void KeyFrame::computeStructuralPlanes()
+{
+    structural_planes.clear();
+    if (!USE_STRUCTURAL_PLANES || point_3d_depth_raw.size() < static_cast<size_t>(STRUCT_PLANE_MIN_INLIERS))
+        return;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    cloud->reserve(point_3d_depth_raw.size());
+    for (const cv::Point3f &p : point_3d_depth_raw)
+    {
+        if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) && p.z > 0.0f)
+            cloud->push_back(pcl::PointXYZ(p.x, p.y, p.z));
+    }
+
+    pcl::SACSegmentation<pcl::PointXYZ> segmentation;
+    segmentation.setOptimizeCoefficients(true);
+    segmentation.setModelType(pcl::SACMODEL_PLANE);
+    segmentation.setMethodType(pcl::SAC_RANSAC);
+    segmentation.setDistanceThreshold(STRUCT_PLANE_DISTANCE_THRESHOLD);
+    segmentation.setMaxIterations(80);
+
+    pcl::ExtractIndices<pcl::PointXYZ> extract;
+    const double ground_cos = std::cos(25.0 * M_PI / 180.0);
+    const double wall_sin = std::sin(25.0 * M_PI / 180.0);
+
+    while (static_cast<int>(structural_planes.size()) < STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME &&
+           static_cast<int>(cloud->size()) >= STRUCT_PLANE_MIN_INLIERS)
+    {
+        pcl::PointIndices::Ptr inliers(new pcl::PointIndices());
+        pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients());
+        segmentation.setInputCloud(cloud);
+        segmentation.segment(*inliers, *coefficients);
+        if (static_cast<int>(inliers->indices.size()) < STRUCT_PLANE_MIN_INLIERS ||
+            coefficients->values.size() < 4)
+            break;
+
+        Eigen::Vector3d normal_d(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
+        const double norm = normal_d.norm();
+        if (norm < 1e-6)
+            break;
+        normal_d /= norm;
+        double distance_d = coefficients->values[3] / norm;
+
+        Eigen::Vector3d normal_w = vio_R_w_i * qi_d * normal_d;
+        const double abs_z = std::abs(normal_w.z());
+        bool accept = false;
+        StructuralPlane::Type type = StructuralPlane::WALL;
+        if (STRUCT_PLANE_ENABLE_GROUND && abs_z > ground_cos)
+        {
+            type = StructuralPlane::GROUND;
+            accept = true;
+            if (normal_w.z() < 0.0)
+            {
+                normal_d = -normal_d;
+                distance_d = -distance_d;
+                normal_w = -normal_w;
+            }
+        }
+        else if (STRUCT_PLANE_ENABLE_WALLS && abs_z < wall_sin)
+        {
+            type = StructuralPlane::WALL;
+            accept = true;
+        }
+
+        if (accept)
+        {
+            double squared_error = 0.0;
+            for (int idx : inliers->indices)
+            {
+                const pcl::PointXYZ &p = cloud->points[idx];
+                const double residual = normal_d.x() * p.x + normal_d.y() * p.y +
+                                        normal_d.z() * p.z + distance_d;
+                squared_error += residual * residual;
+            }
+            StructuralPlane plane;
+            plane.plane_d << normal_d.x(), normal_d.y(), normal_d.z(), distance_d;
+            plane.type = type;
+            plane.inlier_count = static_cast<int>(inliers->indices.size());
+            plane.rmse = std::sqrt(squared_error / static_cast<double>(plane.inlier_count));
+            plane.weight = STRUCT_PLANE_WEIGHT;
+            structural_planes.push_back(plane);
+        }
+
+        extract.setInputCloud(cloud);
+        extract.setIndices(inliers);
+        extract.setNegative(true);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr remaining(new pcl::PointCloud<pcl::PointXYZ>());
+        extract.filter(*remaining);
+        cloud.swap(remaining);
+    }
+
+    if (!structural_planes.empty())
+    {
+        ROS_INFO_THROTTLE(2.0, "keyframe structural planes: %zu", structural_planes.size());
+    }
 }
 
 
@@ -204,7 +309,8 @@ void KeyFrame::FundmantalMatrixRANSAC(const std::vector<cv::Point2f> &matched_2d
             tmp_y = FOCAL_LENGTH * matched_2d_old_norm[i].y + ROW / 2.0;
             tmp_old[i] = cv::Point2f(tmp_x, tmp_y);
         }
-        cv::findFundamentalMat(tmp_cur, tmp_old, cv::FM_RANSAC, 3.0, 0.9, status);
+        cv::findFundamentalMat(tmp_cur, tmp_old, cv::FM_RANSAC,
+                               LOOP_FUNDAMENTAL_THRESHOLD_PX, 0.9, status);
     }
 }
 
@@ -317,6 +423,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	reduceVector(matched_2d_old_norm, status);
 	reduceVector(matched_3d, status);
 	reduceVector(matched_id, status);
+    const int descriptor_matches = static_cast<int>(matched_2d_cur.size());
 	//printf("search by des finish\n");
 
 
@@ -367,15 +474,18 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	    }
 	#endif
 	status.clear();
-	/*
-	FundmantalMatrixRANSAC(matched_2d_cur_norm, matched_2d_old_norm, status);
-	reduceVector(matched_2d_cur, status);
-	reduceVector(matched_2d_old, status);
-	reduceVector(matched_2d_cur_norm, status);
-	reduceVector(matched_2d_old_norm, status);
-	reduceVector(matched_3d, status);
-	reduceVector(matched_id, status);
-	*/
+    if (LOOP_GEOM_VERIFY && LOOP_ENABLE_FUNDAMENTAL_CHECK)
+    {
+        FundmantalMatrixRANSAC(matched_2d_cur_norm, matched_2d_old_norm, status);
+        reduceVector(matched_2d_cur, status);
+        reduceVector(matched_2d_old, status);
+        reduceVector(matched_2d_cur_norm, status);
+        reduceVector(matched_2d_old_norm, status);
+        reduceVector(matched_3d, status);
+        reduceVector(matched_id, status);
+        ROS_INFO("loop geom F-check %d -> %d matches", descriptor_matches, (int)matched_2d_cur.size());
+    }
+    const int fundamental_inliers = static_cast<int>(matched_2d_cur.size());
 	#if 0
 		if (DEBUG_IMAGE)
 	    {
@@ -419,6 +529,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 
 	//ROS_ERROR("points after: %d", (int)matched_2d_cur.size());
 
+	const int min_loop_inliers = LOOP_GEOM_VERIFY ? std::max(MIN_LOOP_NUM, LOOP_MIN_PNP_INLIERS) : MIN_LOOP_NUM;
 	if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
 	{
 
@@ -430,7 +541,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	    reduceVector(matched_2d_old_norm, status);
 	    reduceVector(matched_3d, status);
 	    reduceVector(matched_id, status);
-		ROS_WARN("points left after RANSAC: %d", (int)matched_2d_cur.size());
+		ROS_WARN("loop PnP RANSAC descriptor: %d F: %d PnP: %d", descriptor_matches, fundamental_inliers, (int)matched_2d_cur.size());
 	    #if 1
 	    	if (DEBUG_IMAGE)
 	        {
@@ -487,15 +598,24 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	    #endif
 	}
 
-	if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
+	if ((int)matched_2d_cur.size() >= min_loop_inliers)
 	{
 	    relative_t = PnP_R_old.transpose() * (origin_vio_T - PnP_T_old);
 	    relative_q = PnP_R_old.transpose() * origin_vio_R;
 	    relative_yaw = Utility::normalizeAngle(Utility::R2ypr(origin_vio_R).x() - Utility::R2ypr(PnP_R_old).x());
+        const double inlier_ratio = descriptor_matches > 0 ?
+            static_cast<double>(matched_2d_cur.size()) / static_cast<double>(descriptor_matches) : 0.0;
+        if (LOOP_GEOM_VERIFY && LOOP_TEASER_ENABLE)
+        {
+            ROS_WARN_THROTTLE(5.0, "TEASER++ loop verification is requested but not linked; using F-RANSAC + PnP geometry fallback");
+        }
+        const double max_yaw_deg = LOOP_GEOM_VERIFY ? LOOP_MAX_YAW_DEG : 30.0;
+        const double max_translation_m = LOOP_GEOM_VERIFY ? LOOP_MAX_TRANSLATION_M : 20.0;
 	    //printf("PNP relative\n");
 	    //cout << "pnp relative_t " << relative_t.transpose() << endl;
 	    //cout << "pnp relative_yaw " << relative_yaw << endl;
-	    if (abs(relative_yaw) < 30.0 && relative_t.norm() < 20.0)
+	    if ((!LOOP_GEOM_VERIFY || inlier_ratio >= LOOP_MIN_INLIER_RATIO) &&
+            abs(relative_yaw) < max_yaw_deg && relative_t.norm() < max_translation_m)
 	    {
 
 	    	has_loop = true;
@@ -532,6 +652,9 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	    	}
 	        return true;
 	    }
+        ROS_WARN("reject loop %d-%d geom check: inliers %d ratio %.3f yaw %.2f trans %.2f",
+                 index, old_kf->index, (int)matched_2d_cur.size(), inlier_ratio,
+                 relative_yaw, relative_t.norm());
 	}
 	//printf("loop final use num %d %lf--------------- \n", (int)matched_2d_cur.size(), t_match.toc());
 	return false;

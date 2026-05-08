@@ -336,3 +336,74 @@ struct DepthToMapFourDOFError
 	Matrix3d R_i_c;
 	Vector3d P_i_c;
 };
+
+struct StructuralPlaneFourDOFError
+{
+	StructuralPlaneFourDOFError(const Vector4d &plane_d,
+								const Vector4d &reference_plane_w,
+								double sqrt_info,
+								double pitch,
+								double roll,
+								const Matrix3d &R_i_d,
+								const Vector3d &P_i_d)
+		: plane_d(plane_d), reference_plane_w(reference_plane_w), sqrt_info(sqrt_info),
+		  pitch(pitch), roll(roll), R_i_d(R_i_d), P_i_d(P_i_d)
+	{
+	}
+
+	template <typename T>
+	bool operator()(const T* const yaw_i, const T* t_i, T* residuals) const
+	{
+		T w_R_i[9];
+		YawPitchRollToRotationMatrix(yaw_i[0], T(pitch), T(roll), w_R_i);
+
+		T n_i[3];
+		n_i[0] = T(R_i_d(0, 0)) * T(plane_d.x()) + T(R_i_d(0, 1)) * T(plane_d.y()) +
+				 T(R_i_d(0, 2)) * T(plane_d.z());
+		n_i[1] = T(R_i_d(1, 0)) * T(plane_d.x()) + T(R_i_d(1, 1)) * T(plane_d.y()) +
+				 T(R_i_d(1, 2)) * T(plane_d.z());
+		n_i[2] = T(R_i_d(2, 0)) * T(plane_d.x()) + T(R_i_d(2, 1)) * T(plane_d.y()) +
+				 T(R_i_d(2, 2)) * T(plane_d.z());
+
+		T n_w[3];
+		RotationMatrixRotatePoint(w_R_i, n_i, n_w);
+
+		T p_d_i[3] = {T(P_i_d.x()), T(P_i_d.y()), T(P_i_d.z())};
+		T p_d_w[3];
+		RotationMatrixRotatePoint(w_R_i, p_d_i, p_d_w);
+		p_d_w[0] += t_i[0];
+		p_d_w[1] += t_i[1];
+		p_d_w[2] += t_i[2];
+
+		T d_w = T(plane_d.w()) - (n_w[0] * p_d_w[0] + n_w[1] * p_d_w[1] + n_w[2] * p_d_w[2]);
+		const T rx = T(reference_plane_w.x());
+		const T ry = T(reference_plane_w.y());
+		const T rz = T(reference_plane_w.z());
+
+		residuals[0] = T(sqrt_info) * (d_w - T(reference_plane_w.w()));
+		residuals[1] = T(sqrt_info) * (n_w[1] * rz - n_w[2] * ry);
+		residuals[2] = T(sqrt_info) * (n_w[2] * rx - n_w[0] * rz);
+		residuals[3] = T(sqrt_info) * (n_w[0] * ry - n_w[1] * rx);
+		return true;
+	}
+
+	static ceres::CostFunction* Create(const Vector4d &plane_d,
+									   const Vector4d &reference_plane_w,
+									   double sqrt_info,
+									   double pitch,
+									   double roll,
+									   const Matrix3d &R_i_d,
+									   const Vector3d &P_i_d)
+	{
+	  return new ceres::AutoDiffCostFunction<StructuralPlaneFourDOFError, 4, 1, 3>(
+		  new StructuralPlaneFourDOFError(plane_d, reference_plane_w, sqrt_info, pitch, roll, R_i_d, P_i_d));
+	}
+
+	Vector4d plane_d;
+	Vector4d reference_plane_w;
+	double sqrt_info;
+	double pitch;
+	double roll;
+	Matrix3d R_i_d;
+	Vector3d P_i_d;
+};

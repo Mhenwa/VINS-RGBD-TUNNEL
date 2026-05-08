@@ -19,6 +19,21 @@ using namespace Eigen;
 using namespace std;
 using namespace DVision;
 
+struct StructuralPlane
+{
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    enum Type
+    {
+        GROUND = 0,
+        WALL = 1
+    };
+
+    Eigen::Vector4d plane_d;
+    Type type;
+    int inlier_count;
+    double rmse;
+    double weight;
+};
 
 class BriefExtractor
 {
@@ -41,6 +56,7 @@ public:
 			 cv::Mat &_image, int _loop_index, Eigen::Matrix<double, 8, 1 > &_loop_info,
 			 vector<cv::KeyPoint> &_keypoints, vector<cv::KeyPoint> &_keypoints_norm, vector<BRIEF::bitset> &_brief_descriptors);
 	bool findConnection(KeyFrame* old_kf);
+	void computeStructuralPlanes();
 	void computeWindowBRIEFPoint();
 	void computeBRIEFPoint();
 	//void extractBrief();
@@ -94,6 +110,7 @@ public:
     vector<cv::Point3f> point_3d_depth_raw;
     vector<cv::Vec3b> point_3d_depth_color;
     vector<cv::Vec3b> point_3d_depth_color_raw;
+    vector<StructuralPlane, Eigen::aligned_allocator<StructuralPlane> > structural_planes;
 	vector<double> point_id;
 	vector<cv::KeyPoint> keypoints;
 	vector<cv::KeyPoint> keypoints_norm;

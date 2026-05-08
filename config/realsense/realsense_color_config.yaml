@@ -41,10 +41,43 @@ depth_map_neighbor_count: 5
 depth_map_max_neighbor_dist: 1.0
 depth_map_plane_max_dist: 0.2
 depth_map_min_scale: 0.1
+depth_map_uncertainty_enable: 0
+depth_map_uncertainty_min_weight: 0.20
+depth_map_uncertainty_max_weight: 1.00
+depth_map_uncertainty_range: 4.0
+depth_map_uncertainty_plane_sigma: 0.05
+depth_map_uncertainty_residual_sigma: 0.10
 depth_map_pose_graph_target_keyframes: 5
 depth_map_pose_graph_opt_interval: 10
 depth_map_rebuild_each_iteration: 1
 depth_cloud_sync_tol: 0.02
+
+# lightweight structural plane constraints
+use_structural_planes: 0
+struct_plane_min_inliers: 120
+struct_plane_distance_threshold: 0.04
+struct_plane_normal_merge_deg: 10.0
+struct_plane_distance_merge: 0.25
+struct_plane_weight: 30.0
+struct_plane_huber: 0.10
+struct_plane_max_planes_per_keyframe: 3
+struct_plane_enable_ground: 1
+struct_plane_enable_walls: 1
+
+# corridor loop geometric verification
+loop_geom_verify: 1
+loop_min_bow_score: 0.05
+loop_candidate_score: 0.015
+loop_enable_fundamental_check: 1
+loop_fundamental_threshold_px: 2.0
+loop_min_pnp_inliers: 35
+loop_min_inlier_ratio: 0.30
+loop_max_yaw_deg: 25.0
+loop_max_translation_m: 12.0
+loop_teaser_enable: 1
+loop_teaser_noise_bound: 0.10
+loop_teaser_min_inliers: 30
+loop_teaser_max_rmse: 0.20
 
 #camera calibration
 model_type: PINHOLE
