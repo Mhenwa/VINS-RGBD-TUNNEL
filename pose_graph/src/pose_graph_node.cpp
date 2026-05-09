@@ -13,9 +13,15 @@
 
 #include <visualization_msgs/Marker.h>
 #include <std_msgs/Bool.h>
+#include <std_srvs/Trigger.h>
 #include <cv_bridge/cv_bridge.h>
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
 #include <iostream>
 #include <ros/package.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -45,8 +51,10 @@ int skip_cnt = 0;
 bool load_flag = 0;
 bool start_flag = 0;
 double SKIP_DIS = 0;
+double IMAGE_DISCONTINUE_THRESHOLD = 1.0;
 
 float PCL_MAX_DIST, PCL_MIN_DIST, RESOLUTION;
+int PCL_FILTER_MIN_DENSITY = 2;
 int U_BOUNDARY, D_BOUNDARY, L_BOUNDARY, R_BOUNDARY;
 int VISUALIZATION_SHIFT_X;
 int VISUALIZATION_SHIFT_Y;
@@ -57,6 +65,58 @@ int DEBUG_IMAGE;
 int VISUALIZE_IMU_FORWARD;
 int LOOP_CLOSURE;
 int FAST_RELOCALIZATION;
+int DENSE_DEPTH_MEDIAN_KERNEL = 3;
+int DENSE_DEPTH_EDGE_FILTER = 1;
+double DENSE_DEPTH_EDGE_THRESHOLD = 0.20;
+int DENSE_DEPTH_ADAPTIVE_SAMPLING = 1;
+int DENSE_DEPTH_NEAR_STRIDE = 5;
+int DENSE_DEPTH_MID_STRIDE = 10;
+int DENSE_DEPTH_FAR_STRIDE = 15;
+double DENSE_DEPTH_NEAR_RANGE = 2.0;
+double DENSE_DEPTH_MID_RANGE = 4.0;
+int DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME = 12000;
+int DENSE_DEPTH_PROFILE = 0;
+int AUTO_SAVE_MAP_ON_EXIT = 1;
+int USE_DEPTH_TO_MAP_POSE_GRAPH = 1;
+double DEPTH_MAP_WEIGHT = 100.0;
+double DEPTH_MAP_HUBER = 1.0;
+int DEPTH_MAP_MIN_EDGES = 50;
+int DEPTH_MAP_MAX_EDGES_PER_FRAME = 800;
+int DEPTH_MAP_NEIGHBOR_COUNT = 5;
+double DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+double DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+double DEPTH_MAP_MIN_SCALE = 0.1;
+int DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 5;
+int DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 10;
+int DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+double DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.20;
+double DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = 1.00;
+double DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+double DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+double DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
+int USE_STRUCTURAL_PLANES = 0;
+int STRUCT_PLANE_MIN_INLIERS = 120;
+double STRUCT_PLANE_DISTANCE_THRESHOLD = 0.04;
+double STRUCT_PLANE_NORMAL_MERGE_DEG = 10.0;
+double STRUCT_PLANE_DISTANCE_MERGE = 0.25;
+double STRUCT_PLANE_WEIGHT = 30.0;
+double STRUCT_PLANE_HUBER = 0.10;
+int STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = 3;
+int STRUCT_PLANE_ENABLE_GROUND = 1;
+int STRUCT_PLANE_ENABLE_WALLS = 1;
+int LOOP_GEOM_VERIFY = 1;
+double LOOP_MIN_BOW_SCORE = 0.05;
+double LOOP_CANDIDATE_SCORE = 0.015;
+int LOOP_ENABLE_FUNDAMENTAL_CHECK = 1;
+double LOOP_FUNDAMENTAL_THRESHOLD_PX = 2.0;
+int LOOP_MIN_PNP_INLIERS = 35;
+double LOOP_MIN_INLIER_RATIO = 0.30;
+double LOOP_MAX_YAW_DEG = 25.0;
+double LOOP_MAX_TRANSLATION_M = 12.0;
+int LOOP_TEASER_ENABLE = 1;
+double LOOP_TEASER_NOISE_BOUND = 0.10;
+int LOOP_TEASER_MIN_INLIERS = 30;
+double LOOP_TEASER_MAX_RMSE = 0.20;
 
 
 camodocal::CameraPtr m_camera;
@@ -73,11 +133,115 @@ ros::Publisher pub_key_odometrys;
 ros::Publisher pub_vio_path;
 nav_msgs::Path no_loop_path;
 
+template <typename T>
+void readOptionalRosParam(ros::NodeHandle &n, const std::string &name, T &value)
+{
+    T override_value;
+    if (n.getParam(name, override_value))
+    {
+        value = override_value;
+        ROS_INFO_STREAM("Override " << name << ": " << value);
+    }
+}
+
 std::string BRIEF_PATTERN_FILE;
 std::string POSE_GRAPH_SAVE_PATH;
 std::string VINS_RESULT_PATH;
 std::string OUTPUT_PATH;
 std::string PCD_OUTPUT_PATH;
+
+float depthMetersAt(const cv::Mat &depth, int row, int col)
+{
+    if (row < 0 || row >= depth.rows || col < 0 || col >= depth.cols)
+        return 0.0f;
+    return static_cast<float>(depth.at<unsigned short>(row, col)) / 1000.0f;
+}
+
+bool validDepth(float depth)
+{
+    return std::isfinite(depth) && depth > PCL_MIN_DIST && depth < PCL_MAX_DIST;
+}
+
+bool isDepthDiscontinuity(const cv::Mat &depth, int row, int col, float center_depth)
+{
+    if (!DENSE_DEPTH_EDGE_FILTER)
+        return false;
+
+    const int dr[4] = {-1, 1, 0, 0};
+    const int dc[4] = {0, 0, -1, 1};
+    for (int k = 0; k < 4; ++k)
+    {
+        const float neighbor_depth = depthMetersAt(depth, row + dr[k], col + dc[k]);
+        if (validDepth(neighbor_depth) &&
+            std::abs(neighbor_depth - center_depth) > DENSE_DEPTH_EDGE_THRESHOLD)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+int denseDepthStride(float depth)
+{
+    if (!DENSE_DEPTH_ADAPTIVE_SAMPLING)
+        return std::max(1, PCL_DIST);
+    if (depth < DENSE_DEPTH_NEAR_RANGE)
+        return std::max(1, DENSE_DEPTH_NEAR_STRIDE);
+    if (depth < DENSE_DEPTH_MID_RANGE)
+        return std::max(1, DENSE_DEPTH_MID_STRIDE);
+    return std::max(1, DENSE_DEPTH_FAR_STRIDE);
+}
+
+void limitDenseDepthPoints(vector<cv::Point3f> &points, vector<cv::Vec3b> &colors)
+{
+    if (DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME <= 0 ||
+        static_cast<int>(points.size()) <= DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME)
+    {
+        return;
+    }
+
+    const size_t keep = static_cast<size_t>(DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME);
+    const size_t original_size = points.size();
+    vector<cv::Point3f> limited_points;
+    vector<cv::Vec3b> limited_colors;
+    limited_points.reserve(keep);
+    limited_colors.reserve(keep);
+    for (size_t out_idx = 0; out_idx < keep; ++out_idx)
+    {
+        const size_t src_idx = out_idx * original_size / keep;
+        limited_points.push_back(points[src_idx]);
+        if (src_idx < colors.size())
+            limited_colors.push_back(colors[src_idx]);
+        else
+            limited_colors.push_back(cv::Vec3b(128, 128, 128));
+    }
+    points.swap(limited_points);
+    colors.swap(limited_colors);
+}
+
+bool savePoseGraphOutputs(std::string *message)
+{
+    if (!LOOP_CLOSURE)
+    {
+        if (message)
+            *message = "loop closure is disabled; pose graph outputs are not active";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_process);
+    posegraph.savePoseGraph();
+    posegraph.saveVoxbloxMap();
+    if (message)
+        *message = "saved pose graph and Voxblox outputs";
+    return true;
+}
+
+bool saveMapService(std_srvs::Trigger::Request & /*request*/,
+                    std_srvs::Trigger::Response &response)
+{
+    response.success = savePoseGraphOutputs(&response.message);
+    return true;
+}
 CameraPoseVisualization cameraposevisual(1, 0, 0, 1);
 Eigen::Vector3d last_t(-100, -100, -100);
 double last_image_time = -1;
@@ -107,6 +271,27 @@ string joinPath(const string &base, const string &name)
     if (base.back() == '/')
         return base + name;
     return base + "/" + name;
+}
+
+bool directoryExists(const string &path)
+{
+    struct stat info;
+    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+bool makeDirectoryRecursive(const string &path)
+{
+    if (path.empty() || directoryExists(path))
+        return true;
+
+    string parent = parentPath(path);
+    if (!parent.empty() && parent != path && !makeDirectoryRecursive(parent))
+        return false;
+
+    if (mkdir(path.c_str(), 0755) == 0 || errno == EEXIST)
+        return directoryExists(path);
+
+    return false;
 }
 
 //not used in my case, just ignore sequence 1-5
@@ -150,7 +335,8 @@ void image_callback(const sensor_msgs::ImageConstPtr &image_msg, const sensor_ms
     // detect unstable camera stream
     if (last_image_time == -1)
         last_image_time = image_msg->header.stamp.toSec();
-    else if (image_msg->header.stamp.toSec() - last_image_time > 1.0 || image_msg->header.stamp.toSec() < last_image_time)
+    else if (image_msg->header.stamp.toSec() - last_image_time > IMAGE_DISCONTINUE_THRESHOLD ||
+             image_msg->header.stamp.toSec() < last_image_time)
     {
         ROS_WARN("image discontinue! detect a new sequence!");
         new_sequence();
@@ -344,7 +530,7 @@ void process()
 {
     if (!LOOP_CLOSURE)
         return;
-    while (true)
+    while (ros::ok())
     {
         sensor_msgs::ImageConstPtr image_msg = NULL;
         sensor_msgs::ImageConstPtr depth_msg = NULL;
@@ -428,6 +614,30 @@ void process()
             else
                 ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
 
+            cv::Mat color_image;
+            try
+            {
+                if (image_msg->encoding == sensor_msgs::image_encodings::BGR8)
+                    color_image = cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGR8)->image.clone();
+                else if (image_msg->encoding == sensor_msgs::image_encodings::RGB8)
+                    color_image = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8)->image;
+                else if (image_msg->encoding == sensor_msgs::image_encodings::BGRA8)
+                    cv::cvtColor(cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGRA8)->image,
+                                 color_image, cv::COLOR_BGRA2BGR);
+                else if (image_msg->encoding == sensor_msgs::image_encodings::RGBA8)
+                    cv::cvtColor(cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::RGBA8)->image,
+                                 color_image, cv::COLOR_RGBA2BGR);
+                else if (image_msg->encoding == "8UC3")
+                    color_image = cv_bridge::toCvShare(image_msg)->image.clone();
+                else
+                    cv::cvtColor(ptr->image, color_image, cv::COLOR_GRAY2BGR);
+            }
+            catch (const cv_bridge::Exception &e)
+            {
+                ROS_WARN("Failed to convert image to BGR for dense map color: %s", e.what());
+                cv::cvtColor(ptr->image, color_image, cv::COLOR_GRAY2BGR);
+            }
+
             //depth has encoding TYPE_16UC1
             cv_bridge::CvImageConstPtr depth_ptr;
             // debug use     std::cout<<depth_msg->encoding<<std::endl;
@@ -459,6 +669,7 @@ void process()
                 vector<cv::Point2f> point_2d_uv;
                 vector<cv::Point2f> point_2d_normal;
                 vector<cv::Point3f> point_3d_depth;
+                vector<cv::Vec3b> point_3d_depth_color;
                 vector<double> point_id;
 
                 for (unsigned int i = 0; i < point_msg->points.size(); i++)
@@ -482,29 +693,73 @@ void process()
 
                     //printf("u %f, v %f \n", p_2d_uv.x, p_2d_uv.y);
                 }
-                // ROW: 480 y  COL: 640 x
-                //debug: int count_ = 0;
-                for (int i = L_BOUNDARY; i < COL - R_BOUNDARY; i += PCL_DIST)
+                cv::Mat dense_depth = depth;
+                if (DENSE_DEPTH_MEDIAN_KERNEL >= 3)
                 {
-                    for (int j = U_BOUNDARY; j < ROW - D_BOUNDARY; j += PCL_DIST)
+                    if (DENSE_DEPTH_MEDIAN_KERNEL % 2 == 0)
+                        DENSE_DEPTH_MEDIAN_KERNEL += 1;
+                    cv::medianBlur(depth, dense_depth, DENSE_DEPTH_MEDIAN_KERNEL);
+                }
+
+                TicToc dense_depth_timer;
+                int depth_candidates = 0;
+                int depth_rejected_range = 0;
+                int depth_rejected_edge = 0;
+                int depth_rejected_stride = 0;
+                const int scan_stride = DENSE_DEPTH_ADAPTIVE_SAMPLING ?
+                    std::max(1, std::min(DENSE_DEPTH_NEAR_STRIDE,
+                                         std::min(DENSE_DEPTH_MID_STRIDE, DENSE_DEPTH_FAR_STRIDE))) :
+                    std::max(1, PCL_DIST);
+
+                for (int i = L_BOUNDARY; i < COL - R_BOUNDARY; i += scan_stride)
+                {
+                    for (int j = U_BOUNDARY; j < ROW - D_BOUNDARY; j += scan_stride)
                     {
+                        ++depth_candidates;
+                        float depth_val = depthMetersAt(dense_depth, j, i);
+                        if (!validDepth(depth_val))
+                        {
+                            ++depth_rejected_range;
+                            continue;
+                        }
+                        if (isDepthDiscontinuity(dense_depth, j, i, depth_val))
+                        {
+                            ++depth_rejected_edge;
+                            continue;
+                        }
+                        const int sample_stride = denseDepthStride(depth_val);
+                        if (((i - L_BOUNDARY) % sample_stride) != 0 ||
+                            ((j - U_BOUNDARY) % sample_stride) != 0)
+                        {
+                            ++depth_rejected_stride;
+                            continue;
+                        }
+
                         Eigen::Vector2d a(i, j);
                         Eigen::Vector3d b;
 						//depth is aligned
                         m_camera->liftProjective(a, b);
-                        float depth_val = ((float)depth.at<unsigned short>(j, i)) / 1000.0;
-                        if (depth_val > PCL_MIN_DIST && depth_val < PCL_MAX_DIST)
-                        {
-                            //debug: ++count_;
-                            point_3d_depth.push_back(cv::Point3f(b.x() * depth_val, b.y() * depth_val, depth_val));
-                        }
+                        point_3d_depth.push_back(cv::Point3f(b.x() * depth_val, b.y() * depth_val, depth_val));
+                        if (j >= 0 && j < color_image.rows && i >= 0 && i < color_image.cols)
+                            point_3d_depth_color.push_back(color_image.at<cv::Vec3b>(j, i));
+                        else
+                            point_3d_depth_color.push_back(cv::Vec3b(128, 128, 128));
                     }
                 }
-                //debug: ROS_WARN("Depth points count: %d", count_);
+                const int depth_points_before_limit = static_cast<int>(point_3d_depth.size());
+                limitDenseDepthPoints(point_3d_depth, point_3d_depth_color);
+                if (DENSE_DEPTH_PROFILE && frame_index % 30 == 0)
+                {
+                    ROS_INFO("dense depth points: %zu/%d candidates, range_reject: %d edge_reject: %d stride_reject: %d limited_from: %d time: %.2f ms",
+                             point_3d_depth.size(), depth_candidates,
+                             depth_rejected_range, depth_rejected_edge, depth_rejected_stride,
+                             depth_points_before_limit, dense_depth_timer.toc());
+                }
 
                 // 通过frame_index标记对应帧
                 // add sparse depth img to this class
-                KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), frame_index, T, R, image, point_3d_depth,
+                KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), frame_index, T, R, image,
+                                   point_3d_depth, point_3d_depth_color,
                                    point_3d, point_2d_uv, point_2d_normal, point_id, sequence);
                 m_process.lock();
                 start_flag = 1;
@@ -524,14 +779,12 @@ void command()
 {
     if (!LOOP_CLOSURE)
         return;
-    while(1)
+    while(ros::ok())
     {
         char c = getchar();
         if (c == 's')
         {
-            m_process.lock();
-            posegraph.savePoseGraph();
-            m_process.unlock();
+            savePoseGraphOutputs(NULL);
             printf("save pose graph finish\nyou can set 'load_previous_pose_graph' to 1 in the config file to reuse it next time\n");
             printf("program shutting down...\n");
             ros::shutdown();
@@ -598,10 +851,256 @@ int main(int argc, char **argv)
         PCL_MIN_DIST = fsSettings["pcl_min_dist"];
         PCL_MAX_DIST = fsSettings["pcl_max_dist"];
 		RESOLUTION = fsSettings["resolution"];
+        if (!fsSettings["pcl_filter_min_density"].empty())
+            PCL_FILTER_MIN_DENSITY = fsSettings["pcl_filter_min_density"];
+        if (PCL_FILTER_MIN_DENSITY < 1)
+            PCL_FILTER_MIN_DENSITY = 1;
+        if (!fsSettings["dense_depth_median_kernel"].empty())
+            DENSE_DEPTH_MEDIAN_KERNEL = fsSettings["dense_depth_median_kernel"];
+        if (!fsSettings["dense_depth_edge_filter"].empty())
+            DENSE_DEPTH_EDGE_FILTER = fsSettings["dense_depth_edge_filter"];
+        if (!fsSettings["dense_depth_edge_threshold"].empty())
+            DENSE_DEPTH_EDGE_THRESHOLD = fsSettings["dense_depth_edge_threshold"];
+        if (!fsSettings["dense_depth_adaptive_sampling"].empty())
+            DENSE_DEPTH_ADAPTIVE_SAMPLING = fsSettings["dense_depth_adaptive_sampling"];
+        if (!fsSettings["dense_depth_near_stride"].empty())
+            DENSE_DEPTH_NEAR_STRIDE = fsSettings["dense_depth_near_stride"];
+        if (!fsSettings["dense_depth_mid_stride"].empty())
+            DENSE_DEPTH_MID_STRIDE = fsSettings["dense_depth_mid_stride"];
+        if (!fsSettings["dense_depth_far_stride"].empty())
+            DENSE_DEPTH_FAR_STRIDE = fsSettings["dense_depth_far_stride"];
+        if (!fsSettings["dense_depth_near_range"].empty())
+            DENSE_DEPTH_NEAR_RANGE = fsSettings["dense_depth_near_range"];
+        if (!fsSettings["dense_depth_mid_range"].empty())
+            DENSE_DEPTH_MID_RANGE = fsSettings["dense_depth_mid_range"];
+        if (!fsSettings["dense_depth_max_points_per_keyframe"].empty())
+            DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME = fsSettings["dense_depth_max_points_per_keyframe"];
+        if (!fsSettings["dense_depth_profile"].empty())
+            DENSE_DEPTH_PROFILE = fsSettings["dense_depth_profile"];
+        if (!fsSettings["auto_save_map_on_exit"].empty())
+            AUTO_SAVE_MAP_ON_EXIT = fsSettings["auto_save_map_on_exit"];
+        if (DENSE_DEPTH_MEDIAN_KERNEL < 0)
+            DENSE_DEPTH_MEDIAN_KERNEL = 0;
+        if (DENSE_DEPTH_NEAR_STRIDE < 1)
+            DENSE_DEPTH_NEAR_STRIDE = 1;
+        if (DENSE_DEPTH_MID_STRIDE < 1)
+            DENSE_DEPTH_MID_STRIDE = 1;
+        if (DENSE_DEPTH_FAR_STRIDE < 1)
+            DENSE_DEPTH_FAR_STRIDE = 1;
+        if (DENSE_DEPTH_EDGE_THRESHOLD <= 0.0)
+            DENSE_DEPTH_EDGE_THRESHOLD = 0.20;
+        if (DENSE_DEPTH_NEAR_RANGE <= 0.0)
+            DENSE_DEPTH_NEAR_RANGE = 2.0;
+        if (DENSE_DEPTH_MID_RANGE <= DENSE_DEPTH_NEAR_RANGE)
+            DENSE_DEPTH_MID_RANGE = DENSE_DEPTH_NEAR_RANGE + 1.0;
+        ROS_INFO("dense depth mapping: median_kernel: %d edge_filter: %d edge_threshold: %.3f adaptive: %d strides: %d/%d/%d ranges: %.2f/%.2f max_points: %d profile: %d",
+                 DENSE_DEPTH_MEDIAN_KERNEL, DENSE_DEPTH_EDGE_FILTER, DENSE_DEPTH_EDGE_THRESHOLD,
+                 DENSE_DEPTH_ADAPTIVE_SAMPLING, DENSE_DEPTH_NEAR_STRIDE, DENSE_DEPTH_MID_STRIDE,
+                 DENSE_DEPTH_FAR_STRIDE, DENSE_DEPTH_NEAR_RANGE, DENSE_DEPTH_MID_RANGE,
+                 DENSE_DEPTH_MAX_POINTS_PER_KEYFRAME, DENSE_DEPTH_PROFILE);
+        ROS_INFO("auto save map on exit: %d", AUTO_SAVE_MAP_ON_EXIT);
+        if (!fsSettings["use_depth_to_map_pose_graph"].empty())
+            USE_DEPTH_TO_MAP_POSE_GRAPH = fsSettings["use_depth_to_map_pose_graph"];
+        if (!fsSettings["depth_map_weight"].empty())
+            DEPTH_MAP_WEIGHT = fsSettings["depth_map_weight"];
+        if (!fsSettings["depth_map_huber"].empty())
+            DEPTH_MAP_HUBER = fsSettings["depth_map_huber"];
+        if (!fsSettings["depth_map_min_edges"].empty())
+            DEPTH_MAP_MIN_EDGES = fsSettings["depth_map_min_edges"];
+        if (!fsSettings["depth_map_max_edges_per_frame"].empty())
+            DEPTH_MAP_MAX_EDGES_PER_FRAME = fsSettings["depth_map_max_edges_per_frame"];
+        if (!fsSettings["depth_map_neighbor_count"].empty())
+            DEPTH_MAP_NEIGHBOR_COUNT = fsSettings["depth_map_neighbor_count"];
+        if (!fsSettings["depth_map_max_neighbor_dist"].empty())
+            DEPTH_MAP_MAX_NEIGHBOR_DIST = fsSettings["depth_map_max_neighbor_dist"];
+        if (!fsSettings["depth_map_plane_max_dist"].empty())
+            DEPTH_MAP_PLANE_MAX_DIST = fsSettings["depth_map_plane_max_dist"];
+        if (!fsSettings["depth_map_min_scale"].empty())
+            DEPTH_MAP_MIN_SCALE = fsSettings["depth_map_min_scale"];
+        if (!fsSettings["depth_map_pose_graph_target_keyframes"].empty())
+            DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = fsSettings["depth_map_pose_graph_target_keyframes"];
+        if (!fsSettings["depth_map_pose_graph_opt_interval"].empty())
+            DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = fsSettings["depth_map_pose_graph_opt_interval"];
+        if (!fsSettings["depth_map_uncertainty_enable"].empty())
+            DEPTH_MAP_UNCERTAINTY_ENABLE = fsSettings["depth_map_uncertainty_enable"];
+        if (!fsSettings["depth_map_uncertainty_min_weight"].empty())
+            DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = fsSettings["depth_map_uncertainty_min_weight"];
+        if (!fsSettings["depth_map_uncertainty_max_weight"].empty())
+            DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = fsSettings["depth_map_uncertainty_max_weight"];
+        if (!fsSettings["depth_map_uncertainty_range"].empty())
+            DEPTH_MAP_UNCERTAINTY_RANGE = fsSettings["depth_map_uncertainty_range"];
+        if (!fsSettings["depth_map_uncertainty_plane_sigma"].empty())
+            DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = fsSettings["depth_map_uncertainty_plane_sigma"];
+        if (!fsSettings["depth_map_uncertainty_residual_sigma"].empty())
+            DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = fsSettings["depth_map_uncertainty_residual_sigma"];
+        if (!fsSettings["use_structural_planes"].empty())
+            USE_STRUCTURAL_PLANES = fsSettings["use_structural_planes"];
+        if (!fsSettings["struct_plane_min_inliers"].empty())
+            STRUCT_PLANE_MIN_INLIERS = fsSettings["struct_plane_min_inliers"];
+        if (!fsSettings["struct_plane_distance_threshold"].empty())
+            STRUCT_PLANE_DISTANCE_THRESHOLD = fsSettings["struct_plane_distance_threshold"];
+        if (!fsSettings["struct_plane_normal_merge_deg"].empty())
+            STRUCT_PLANE_NORMAL_MERGE_DEG = fsSettings["struct_plane_normal_merge_deg"];
+        if (!fsSettings["struct_plane_distance_merge"].empty())
+            STRUCT_PLANE_DISTANCE_MERGE = fsSettings["struct_plane_distance_merge"];
+        if (!fsSettings["struct_plane_weight"].empty())
+            STRUCT_PLANE_WEIGHT = fsSettings["struct_plane_weight"];
+        if (!fsSettings["struct_plane_huber"].empty())
+            STRUCT_PLANE_HUBER = fsSettings["struct_plane_huber"];
+        if (!fsSettings["struct_plane_max_planes_per_keyframe"].empty())
+            STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = fsSettings["struct_plane_max_planes_per_keyframe"];
+        if (!fsSettings["struct_plane_enable_ground"].empty())
+            STRUCT_PLANE_ENABLE_GROUND = fsSettings["struct_plane_enable_ground"];
+        if (!fsSettings["struct_plane_enable_walls"].empty())
+            STRUCT_PLANE_ENABLE_WALLS = fsSettings["struct_plane_enable_walls"];
+        if (!fsSettings["loop_geom_verify"].empty())
+            LOOP_GEOM_VERIFY = fsSettings["loop_geom_verify"];
+        if (!fsSettings["loop_min_bow_score"].empty())
+            LOOP_MIN_BOW_SCORE = fsSettings["loop_min_bow_score"];
+        if (!fsSettings["loop_candidate_score"].empty())
+            LOOP_CANDIDATE_SCORE = fsSettings["loop_candidate_score"];
+        if (!fsSettings["loop_enable_fundamental_check"].empty())
+            LOOP_ENABLE_FUNDAMENTAL_CHECK = fsSettings["loop_enable_fundamental_check"];
+        if (!fsSettings["loop_fundamental_threshold_px"].empty())
+            LOOP_FUNDAMENTAL_THRESHOLD_PX = fsSettings["loop_fundamental_threshold_px"];
+        if (!fsSettings["loop_min_pnp_inliers"].empty())
+            LOOP_MIN_PNP_INLIERS = fsSettings["loop_min_pnp_inliers"];
+        if (!fsSettings["loop_min_inlier_ratio"].empty())
+            LOOP_MIN_INLIER_RATIO = fsSettings["loop_min_inlier_ratio"];
+        if (!fsSettings["loop_max_yaw_deg"].empty())
+            LOOP_MAX_YAW_DEG = fsSettings["loop_max_yaw_deg"];
+        if (!fsSettings["loop_max_translation_m"].empty())
+            LOOP_MAX_TRANSLATION_M = fsSettings["loop_max_translation_m"];
+        if (!fsSettings["loop_teaser_enable"].empty())
+            LOOP_TEASER_ENABLE = fsSettings["loop_teaser_enable"];
+        if (!fsSettings["loop_teaser_noise_bound"].empty())
+            LOOP_TEASER_NOISE_BOUND = fsSettings["loop_teaser_noise_bound"];
+        if (!fsSettings["loop_teaser_min_inliers"].empty())
+            LOOP_TEASER_MIN_INLIERS = fsSettings["loop_teaser_min_inliers"];
+        if (!fsSettings["loop_teaser_max_rmse"].empty())
+            LOOP_TEASER_MAX_RMSE = fsSettings["loop_teaser_max_rmse"];
+        if (!fsSettings["image_discontinue_threshold"].empty())
+            IMAGE_DISCONTINUE_THRESHOLD = fsSettings["image_discontinue_threshold"];
+
+        readOptionalRosParam(n, "use_depth_to_map_pose_graph", USE_DEPTH_TO_MAP_POSE_GRAPH);
+        readOptionalRosParam(n, "depth_map_weight", DEPTH_MAP_WEIGHT);
+        readOptionalRosParam(n, "depth_map_huber", DEPTH_MAP_HUBER);
+        readOptionalRosParam(n, "depth_map_min_edges", DEPTH_MAP_MIN_EDGES);
+        readOptionalRosParam(n, "depth_map_max_edges_per_frame", DEPTH_MAP_MAX_EDGES_PER_FRAME);
+        readOptionalRosParam(n, "depth_map_neighbor_count", DEPTH_MAP_NEIGHBOR_COUNT);
+        readOptionalRosParam(n, "depth_map_max_neighbor_dist", DEPTH_MAP_MAX_NEIGHBOR_DIST);
+        readOptionalRosParam(n, "depth_map_plane_max_dist", DEPTH_MAP_PLANE_MAX_DIST);
+        readOptionalRosParam(n, "depth_map_min_scale", DEPTH_MAP_MIN_SCALE);
+        readOptionalRosParam(n, "depth_map_pose_graph_target_keyframes", DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES);
+        readOptionalRosParam(n, "depth_map_pose_graph_opt_interval", DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL);
+        readOptionalRosParam(n, "depth_map_uncertainty_enable", DEPTH_MAP_UNCERTAINTY_ENABLE);
+        readOptionalRosParam(n, "depth_map_uncertainty_min_weight", DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT);
+        readOptionalRosParam(n, "depth_map_uncertainty_max_weight", DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT);
+        readOptionalRosParam(n, "depth_map_uncertainty_range", DEPTH_MAP_UNCERTAINTY_RANGE);
+        readOptionalRosParam(n, "depth_map_uncertainty_plane_sigma", DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
+        readOptionalRosParam(n, "depth_map_uncertainty_residual_sigma", DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
+        readOptionalRosParam(n, "use_structural_planes", USE_STRUCTURAL_PLANES);
+        readOptionalRosParam(n, "struct_plane_min_inliers", STRUCT_PLANE_MIN_INLIERS);
+        readOptionalRosParam(n, "struct_plane_distance_threshold", STRUCT_PLANE_DISTANCE_THRESHOLD);
+        readOptionalRosParam(n, "struct_plane_normal_merge_deg", STRUCT_PLANE_NORMAL_MERGE_DEG);
+        readOptionalRosParam(n, "struct_plane_distance_merge", STRUCT_PLANE_DISTANCE_MERGE);
+        readOptionalRosParam(n, "struct_plane_weight", STRUCT_PLANE_WEIGHT);
+        readOptionalRosParam(n, "struct_plane_huber", STRUCT_PLANE_HUBER);
+        readOptionalRosParam(n, "struct_plane_max_planes_per_keyframe", STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME);
+        readOptionalRosParam(n, "struct_plane_enable_ground", STRUCT_PLANE_ENABLE_GROUND);
+        readOptionalRosParam(n, "struct_plane_enable_walls", STRUCT_PLANE_ENABLE_WALLS);
+        readOptionalRosParam(n, "loop_geom_verify", LOOP_GEOM_VERIFY);
+        readOptionalRosParam(n, "loop_min_bow_score", LOOP_MIN_BOW_SCORE);
+        readOptionalRosParam(n, "loop_candidate_score", LOOP_CANDIDATE_SCORE);
+        readOptionalRosParam(n, "loop_enable_fundamental_check", LOOP_ENABLE_FUNDAMENTAL_CHECK);
+        readOptionalRosParam(n, "loop_fundamental_threshold_px", LOOP_FUNDAMENTAL_THRESHOLD_PX);
+        readOptionalRosParam(n, "loop_min_pnp_inliers", LOOP_MIN_PNP_INLIERS);
+        readOptionalRosParam(n, "loop_min_inlier_ratio", LOOP_MIN_INLIER_RATIO);
+        readOptionalRosParam(n, "loop_max_yaw_deg", LOOP_MAX_YAW_DEG);
+        readOptionalRosParam(n, "loop_max_translation_m", LOOP_MAX_TRANSLATION_M);
+        readOptionalRosParam(n, "loop_teaser_enable", LOOP_TEASER_ENABLE);
+        readOptionalRosParam(n, "loop_teaser_noise_bound", LOOP_TEASER_NOISE_BOUND);
+        readOptionalRosParam(n, "loop_teaser_min_inliers", LOOP_TEASER_MIN_INLIERS);
+        readOptionalRosParam(n, "loop_teaser_max_rmse", LOOP_TEASER_MAX_RMSE);
+        readOptionalRosParam(n, "image_discontinue_threshold", IMAGE_DISCONTINUE_THRESHOLD);
+
+        if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
+            DEPTH_MAP_NEIGHBOR_COUNT = 3;
+        if (DEPTH_MAP_MAX_EDGES_PER_FRAME < 1)
+            DEPTH_MAP_MAX_EDGES_PER_FRAME = 1;
+        if (DEPTH_MAP_MIN_EDGES < 1)
+            DEPTH_MAP_MIN_EDGES = 1;
+        if (DEPTH_MAP_MAX_NEIGHBOR_DIST <= 0.0)
+            DEPTH_MAP_MAX_NEIGHBOR_DIST = 1.0;
+        if (DEPTH_MAP_PLANE_MAX_DIST <= 0.0)
+            DEPTH_MAP_PLANE_MAX_DIST = 0.2;
+        if (DEPTH_MAP_MIN_SCALE < 0.0)
+            DEPTH_MAP_MIN_SCALE = 0.0;
+        if (DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES < 1)
+            DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES = 1;
+        if (DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL < 0)
+            DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL = 0;
+        if (DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT < 0.0)
+            DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT = 0.0;
+        if (DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT < DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT)
+            DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT = DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT;
+        if (DEPTH_MAP_UNCERTAINTY_RANGE <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_RANGE = 4.0;
+        if (DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
+        if (DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA <= 0.0)
+            DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
+        // Keep the experimental parameters parseable, but force them off in the
+        // final branch after darkroom1/2/3 showed no stable benefit.
+        DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+        USE_STRUCTURAL_PLANES = 0;
+        if (STRUCT_PLANE_MIN_INLIERS < 3)
+            STRUCT_PLANE_MIN_INLIERS = 3;
+        if (STRUCT_PLANE_DISTANCE_THRESHOLD <= 0.0)
+            STRUCT_PLANE_DISTANCE_THRESHOLD = 0.04;
+        if (STRUCT_PLANE_NORMAL_MERGE_DEG <= 0.0)
+            STRUCT_PLANE_NORMAL_MERGE_DEG = 10.0;
+        if (STRUCT_PLANE_DISTANCE_MERGE <= 0.0)
+            STRUCT_PLANE_DISTANCE_MERGE = 0.25;
+        if (STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME < 1)
+            STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME = 1;
+        if (LOOP_FUNDAMENTAL_THRESHOLD_PX <= 0.0)
+            LOOP_FUNDAMENTAL_THRESHOLD_PX = 2.0;
+        if (LOOP_MIN_PNP_INLIERS < MIN_LOOP_NUM)
+            LOOP_MIN_PNP_INLIERS = MIN_LOOP_NUM;
+        if (LOOP_MIN_INLIER_RATIO < 0.0)
+            LOOP_MIN_INLIER_RATIO = 0.0;
+        if (LOOP_MAX_YAW_DEG <= 0.0)
+            LOOP_MAX_YAW_DEG = 25.0;
+        if (LOOP_MAX_TRANSLATION_M <= 0.0)
+            LOOP_MAX_TRANSLATION_M = 12.0;
+
+        ROS_INFO("depth-to-map pose graph: %d weight: %.3f huber: %.3f min_edges: %d max_edges: %d neighbors: %d max_neighbor: %.3f plane_max: %.3f min_scale: %.3f target_kfs: %d opt_interval: %d uncertainty: %d [%.2f, %.2f]",
+                 USE_DEPTH_TO_MAP_POSE_GRAPH, DEPTH_MAP_WEIGHT, DEPTH_MAP_HUBER,
+                 DEPTH_MAP_MIN_EDGES, DEPTH_MAP_MAX_EDGES_PER_FRAME,
+                 DEPTH_MAP_NEIGHBOR_COUNT, DEPTH_MAP_MAX_NEIGHBOR_DIST,
+                 DEPTH_MAP_PLANE_MAX_DIST, DEPTH_MAP_MIN_SCALE,
+                 DEPTH_MAP_POSE_GRAPH_TARGET_KEYFRAMES,
+                 DEPTH_MAP_POSE_GRAPH_OPT_INTERVAL,
+                 DEPTH_MAP_UNCERTAINTY_ENABLE, DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT,
+                 DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT);
+        ROS_INFO("structural planes: %d min_inliers: %d dist: %.3f normal_deg: %.2f merge_dist: %.3f weight: %.2f huber: %.3f max_per_kf: %d ground/walls: %d/%d",
+                 USE_STRUCTURAL_PLANES, STRUCT_PLANE_MIN_INLIERS,
+                 STRUCT_PLANE_DISTANCE_THRESHOLD, STRUCT_PLANE_NORMAL_MERGE_DEG,
+                 STRUCT_PLANE_DISTANCE_MERGE, STRUCT_PLANE_WEIGHT, STRUCT_PLANE_HUBER,
+                 STRUCT_PLANE_MAX_PLANES_PER_KEYFRAME, STRUCT_PLANE_ENABLE_GROUND,
+                 STRUCT_PLANE_ENABLE_WALLS);
+        ROS_INFO("loop geometry verify: %d bow/cand: %.3f/%.3f F: %d thr_px: %.2f pnp_inliers: %d ratio: %.2f yaw: %.1f trans: %.1f teaser_req: %d",
+                 LOOP_GEOM_VERIFY, LOOP_MIN_BOW_SCORE, LOOP_CANDIDATE_SCORE,
+                 LOOP_ENABLE_FUNDAMENTAL_CHECK, LOOP_FUNDAMENTAL_THRESHOLD_PX,
+                 LOOP_MIN_PNP_INLIERS, LOOP_MIN_INLIER_RATIO,
+                 LOOP_MAX_YAW_DEG, LOOP_MAX_TRANSLATION_M, LOOP_TEASER_ENABLE);
+        ROS_INFO("image discontinue threshold: %.2f s", IMAGE_DISCONTINUE_THRESHOLD);
         //OctreePointCloudDensity has no ::Ptr
-		posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
+        posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
-        posegraph.save_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
+        posegraph.color_cloud = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>());
+        posegraph.save_cloud = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>());
 		posegraph.octree->setInputCloud(posegraph.cloud);
         posegraph.octree->addPointsFromInputCloud();
 		// in pcl 1.8.0+, need to set bbox (isVoxelOccupiedAtPoint will check bbox)
@@ -617,10 +1116,26 @@ int main(int argc, char **argv)
 
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["depth_topic"] >> DEPTH_TOPIC;
+        std::string image_topic_override;
+        if (n.getParam("image_topic", image_topic_override) && !image_topic_override.empty())
+        {
+            IMAGE_TOPIC = image_topic_override;
+            ROS_INFO_STREAM("Override image_topic: " << IMAGE_TOPIC);
+        }
+        std::string depth_topic_override;
+        if (n.getParam("depth_topic", depth_topic_override) && !depth_topic_override.empty())
+        {
+            DEPTH_TOPIC = depth_topic_override;
+            ROS_INFO_STREAM("Override depth_topic: " << DEPTH_TOPIC);
+        }
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
         fsSettings["output_path"] >> OUTPUT_PATH;
         PCD_OUTPUT_PATH = joinPath(parentPath(OUTPUT_PATH), "pcd");
+        posegraph.setVoxbloxOutputDirectory(joinPath(parentPath(OUTPUT_PATH), "voxblox"));
         VINS_RESULT_PATH = OUTPUT_PATH;
+        makeDirectoryRecursive(OUTPUT_PATH);
+        makeDirectoryRecursive(POSE_GRAPH_SAVE_PATH);
+        makeDirectoryRecursive(PCD_OUTPUT_PATH);
         fsSettings["save_image"] >> DEBUG_IMAGE;
 
         cv::Mat cv_qid, cv_tid;
@@ -642,6 +1157,7 @@ int main(int argc, char **argv)
             printf("load pose graph\n");
             m_process.lock();
             posegraph.loadPoseGraph();
+            posegraph.loadVoxbloxMap();
             m_process.unlock();
             printf("load pose graph finish\n");
             load_flag = 1;
@@ -689,6 +1205,7 @@ int main(int argc, char **argv)
     //not used
     pub_vio_path = n.advertise<nav_msgs::Path>("no_loop_path", 1000);
     pub_match_points = n.advertise<sensor_msgs::PointCloud>("match_points", 100);
+    ros::ServiceServer save_map_service = n.advertiseService("save_map", saveMapService);
 
     std::thread measurement_process;
     std::thread keyboard_command_process;
@@ -696,9 +1213,20 @@ int main(int argc, char **argv)
     measurement_process = std::thread(process);
     // not used
     keyboard_command_process = std::thread(command);
+    keyboard_command_process.detach();
 
 
     ros::spin();
+    if (AUTO_SAVE_MAP_ON_EXIT)
+    {
+        std::string save_message;
+        if (savePoseGraphOutputs(&save_message))
+            ROS_INFO_STREAM("Auto-saved map on exit: " << save_message);
+        else
+            ROS_WARN_STREAM("Auto-save map on exit skipped: " << save_message);
+    }
+    if (measurement_process.joinable())
+        measurement_process.join();
 
     return 0;
 }

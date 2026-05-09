@@ -37,6 +37,23 @@ extern double TR;
 extern int ESTIMATE_TD;
 extern int ROLLING_SHUTTER;
 extern double ROW, COL;
+extern int USE_DEPTH_TO_MAP;
+extern int DEPTH_MAP_REBUILD_EACH_ITERATION;
+extern double DEPTH_MAP_WEIGHT;
+extern double DEPTH_MAP_HUBER;
+extern int DEPTH_MAP_MIN_EDGES;
+extern int DEPTH_MAP_MAX_EDGES_PER_FRAME;
+extern int DEPTH_MAP_NEIGHBOR_COUNT;
+extern double DEPTH_MAP_MAX_NEIGHBOR_DIST;
+extern double DEPTH_MAP_PLANE_MAX_DIST;
+extern double DEPTH_MAP_MIN_SCALE;
+extern int DEPTH_MAP_UNCERTAINTY_ENABLE;
+extern double DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT;
+extern double DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT;
+extern double DEPTH_MAP_UNCERTAINTY_RANGE;
+extern double DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA;
+extern double DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA;
+extern double DEPTH_CLOUD_SYNC_TOL;
 
 
 void readParameters(ros::NodeHandle &n);

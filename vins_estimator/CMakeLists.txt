@@ -9,6 +9,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 find_package(catkin REQUIRED COMPONENTS
     roscpp
     std_msgs
+    sensor_msgs
     geometry_msgs
     nav_msgs
     tf
@@ -20,8 +21,9 @@ find_package(OpenCV REQUIRED)
 # message(WARNING "OpenCV_VERSION: ${OpenCV_VERSION}")
 
 find_package(Ceres REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common kdtree)
 
-include_directories(${catkin_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS})
+include_directories(${catkin_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 find_package(Eigen3)
@@ -52,4 +54,4 @@ add_executable(vins_estimator
 
 
 target_link_libraries(vins_estimator ${catkin_LIBRARIES} ${OpenCV_LIBS} ${CERES_LIBRARIES})
-
+target_link_libraries(vins_estimator ${PCL_LIBRARIES})

@@ -2,13 +2,14 @@ cmake_minimum_required(VERSION 2.8.3)
 project(pose_graph)
 
 set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS "-std=c++11")
+set(CMAKE_CXX_FLAGS "-std=c++14")
 #-DEIGEN_USE_MKL_ALL")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 
 find_package(catkin REQUIRED COMPONENTS
     roscpp
     std_msgs
+    std_srvs
     nav_msgs
     camera_model
     cv_bridge
@@ -16,6 +17,9 @@ find_package(catkin REQUIRED COMPONENTS
     pcl_ros
     pcl_conversions
     message_filters
+    voxblox
+    voxblox_ros
+    voxblox_msgs
     )
 
 find_package(OpenCV)
@@ -28,11 +32,15 @@ find_package(Eigen3)
 
 include_directories(${catkin_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS}  ${EIGEN3_INCLUDE_DIR} )
 
+# Ceres on ROS Melodic can append -std=c++0x; keep C++14 as the effective flag.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+
 catkin_package()
 
 add_executable(pose_graph
     src/pose_graph_node.cpp
     src/pose_graph.cpp
+    src/voxblox_mapper.cpp
     src/keyframe.cpp
     src/utility/CameraPoseVisualization.cpp
     src/ThirdParty/DBoW/BowVector.cpp
@@ -46,5 +54,6 @@ add_executable(pose_graph
     src/ThirdParty/VocabularyBinary.cpp
     )
 
+add_dependencies(pose_graph ${catkin_EXPORTED_TARGETS})
 target_link_libraries(pose_graph ${catkin_LIBRARIES}  ${OpenCV_LIBS} ${CERES_LIBRARIES})
 message("catkin_lib  ${catkin_LIBRARIES}")

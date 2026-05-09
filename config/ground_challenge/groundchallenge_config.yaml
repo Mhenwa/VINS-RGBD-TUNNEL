@@ -5,7 +5,8 @@ imu_topic: "/camera/imu"
 image_topic: "/camera/color/image_raw"
 
 depth_topic: "/camera/aligned_depth_to_color/image_raw"
-output_path: "/home/shanzy/output/vins/"
+output_path: "/workspace/VINS-RGBD/output/vins/"
+auto_save_map_on_exit: 1
 
 #pointcloud settings
 pcl_dist: 10
@@ -16,6 +17,67 @@ r_boundary: 40
 pcl_min_dist: 0.3
 pcl_max_dist: 6
 resolution: 0.02
+pcl_filter_min_density: 2
+dense_depth_median_kernel: 3
+dense_depth_edge_filter: 1
+dense_depth_edge_threshold: 0.20
+dense_depth_adaptive_sampling: 1
+dense_depth_near_stride: 5
+dense_depth_mid_stride: 10
+dense_depth_far_stride: 15
+dense_depth_near_range: 2.0
+dense_depth_mid_range: 4.0
+dense_depth_max_points_per_keyframe: 12000
+dense_depth_profile: 0
+
+# depth-to-map residual
+use_depth_to_map: 1
+use_depth_to_map_pose_graph: 1
+depth_map_weight: 100.0
+depth_map_huber: 1.0
+depth_map_min_edges: 50
+depth_map_max_edges_per_frame: 800
+depth_map_neighbor_count: 5
+depth_map_max_neighbor_dist: 1.0
+depth_map_plane_max_dist: 0.2
+depth_map_min_scale: 0.1
+depth_map_uncertainty_enable: 0
+depth_map_uncertainty_min_weight: 0.20
+depth_map_uncertainty_max_weight: 1.00
+depth_map_uncertainty_range: 4.0
+depth_map_uncertainty_plane_sigma: 0.05
+depth_map_uncertainty_residual_sigma: 0.10
+depth_map_pose_graph_target_keyframes: 5
+depth_map_pose_graph_opt_interval: 10
+depth_map_rebuild_each_iteration: 1
+depth_cloud_sync_tol: 0.02
+
+# lightweight structural plane constraints
+use_structural_planes: 0
+struct_plane_min_inliers: 120
+struct_plane_distance_threshold: 0.04
+struct_plane_normal_merge_deg: 10.0
+struct_plane_distance_merge: 0.25
+struct_plane_weight: 30.0
+struct_plane_huber: 0.10
+struct_plane_max_planes_per_keyframe: 3
+struct_plane_enable_ground: 1
+struct_plane_enable_walls: 1
+
+# corridor loop geometric verification
+loop_geom_verify: 1
+loop_min_bow_score: 0.05
+loop_candidate_score: 0.015
+loop_enable_fundamental_check: 1
+loop_fundamental_threshold_px: 2.0
+loop_min_pnp_inliers: 35
+loop_min_inlier_ratio: 0.30
+loop_max_yaw_deg: 25.0
+loop_max_translation_m: 12.0
+loop_teaser_enable: 1
+loop_teaser_noise_bound: 0.10
+loop_teaser_min_inliers: 30
+loop_teaser_max_rmse: 0.20
 
 #camera calibration
 
@@ -64,6 +126,9 @@ F_threshold: 1.0        # ransac threshold (pixel)
 show_track: 1           # publish tracking image as topic
 equalize: 0             # if image is too dark or light, trun on equalize to find enough features
 fisheye: 0              # if using fisheye, trun on it. A circle mask will be loaded to remove edge noisy points
+lk_forward_backward_check: 1  # reject low-light tracks that cannot be tracked back to the previous frame
+lk_max_fwd_bwd_error: 1.5     # max forward-backward optical-flow reprojection error in pixels
+lk_max_track_error: -1.0      # disabled by default; set positive to reject high LK photometric error
 
 #optimization parameters
 max_solver_time: 0.04  # max solver itration time (ms), to guarantee real time
@@ -112,7 +177,7 @@ g_norm: 9.805       # gravity magnitude
 loop_closure: 1                    # start loop closure
 fast_relocalization: 1             # useful in real-time and large project
 load_previous_pose_graph: 0        # load and reuse previous pose graph; load from 'pose_graph_save_path'
-pose_graph_save_path: "/home/shanzy/output/pose_graph/" # save and load path
+pose_graph_save_path: "/workspace/VINS-RGBD/output/pose_graph/" # save and load path
 
 #unsynchronization parameters
 estimate_td: 1                      # online estimate time offset between camera and imu

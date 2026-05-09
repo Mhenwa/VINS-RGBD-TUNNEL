@@ -22,6 +22,17 @@ extern int SHOW_TRACK;
 extern int STEREO_TRACK;
 extern int EQUALIZE;
 extern int FISHEYE;
+extern int LK_FORWARD_BACKWARD_CHECK;
+extern double LK_MAX_FWD_BWD_ERROR;
+extern double LK_MAX_TRACK_ERROR;
+extern double IMAGE_DISCONTINUE_THRESHOLD;
 extern bool PUB_THIS_FRAME;
+extern int PCL_DIST;
+extern int U_BOUNDARY;
+extern int D_BOUNDARY;
+extern int L_BOUNDARY;
+extern int R_BOUNDARY;
+extern float PCL_MIN_DIST;
+extern float PCL_MAX_DIST;
 
 void readParameters(ros::NodeHandle &n);

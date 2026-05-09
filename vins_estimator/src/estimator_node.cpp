@@ -4,6 +4,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <cmath>
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
@@ -20,6 +21,7 @@ std::condition_variable con;
 double current_time = -1;
 queue<sensor_msgs::ImuConstPtr> imu_buf;
 queue<sensor_msgs::PointCloudConstPtr> feature_buf;
+queue<sensor_msgs::PointCloudConstPtr> depth_cloud_buf;
 queue<sensor_msgs::PointCloudConstPtr> relo_buf;
 int sum_of_wait = 0;
 
@@ -39,6 +41,13 @@ Eigen::Vector3d gyr_0;
 bool init_feature = 0;
 bool init_imu = 1;
 double last_imu_t = 0;
+
+struct EstimatorMeasurement
+{
+    std::vector<sensor_msgs::ImuConstPtr> imus;
+    sensor_msgs::PointCloudConstPtr feature;
+    sensor_msgs::PointCloudConstPtr depth_cloud;
+};
 
 void predict(const sensor_msgs::ImuConstPtr &imu_msg)
 {
@@ -97,10 +106,9 @@ void update()
 }
 
 
-std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>>
-getMeasurements()
+std::vector<EstimatorMeasurement> getMeasurements()
 {
-    std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>> measurements;
+    std::vector<EstimatorMeasurement> measurements;
 
     while (true)
     {
@@ -122,6 +130,22 @@ getMeasurements()
         }
         sensor_msgs::PointCloudConstPtr img_msg = feature_buf.front();
         feature_buf.pop();
+        sensor_msgs::PointCloudConstPtr depth_cloud_msg = NULL;
+        if (USE_DEPTH_TO_MAP)
+        {
+            const double feature_stamp = img_msg->header.stamp.toSec();
+            while (!depth_cloud_buf.empty() &&
+                   depth_cloud_buf.front()->header.stamp.toSec() < feature_stamp - DEPTH_CLOUD_SYNC_TOL)
+            {
+                depth_cloud_buf.pop();
+            }
+            if (!depth_cloud_buf.empty() &&
+                std::abs(depth_cloud_buf.front()->header.stamp.toSec() - feature_stamp) <= DEPTH_CLOUD_SYNC_TOL)
+            {
+                depth_cloud_msg = depth_cloud_buf.front();
+                depth_cloud_buf.pop();
+            }
+        }
 
         std::vector<sensor_msgs::ImuConstPtr> IMUs;
         while (imu_buf.front()->header.stamp.toSec() < img_msg->header.stamp.toSec() + estimator.td)
@@ -132,7 +156,11 @@ getMeasurements()
         IMUs.emplace_back(imu_buf.front());
         if (IMUs.empty())
             ROS_WARN("no imu between two image");
-        measurements.emplace_back(IMUs, img_msg);
+        EstimatorMeasurement measurement;
+        measurement.imus = IMUs;
+        measurement.feature = img_msg;
+        measurement.depth_cloud = depth_cloud_msg;
+        measurements.emplace_back(measurement);
     }
     return measurements;
 }
@@ -179,6 +207,15 @@ void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
     con.notify_one();
 }
 
+void depth_cloud_callback(const sensor_msgs::PointCloudConstPtr &depth_cloud_msg)
+{
+    if (!USE_DEPTH_TO_MAP)
+        return;
+    m_buf.lock();
+    depth_cloud_buf.push(depth_cloud_msg);
+    m_buf.unlock();
+}
+
 void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
 {
     if (restart_msg->data == true)
@@ -187,6 +224,8 @@ void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
         m_buf.lock();
         while(!feature_buf.empty())
             feature_buf.pop();
+        while(!depth_cloud_buf.empty())
+            depth_cloud_buf.pop();
         while(!imu_buf.empty())
             imu_buf.pop();
         m_buf.unlock();
@@ -211,21 +250,23 @@ void relocalization_callback(const sensor_msgs::PointCloudConstPtr &points_msg)
 // thread: visual-inertial odometry
 void process()
 {
-    while (true)
+    while (ros::ok())
     {
-        std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>> measurements;
+        std::vector<EstimatorMeasurement> measurements;
         std::unique_lock<std::mutex> lk(m_buf);
         con.wait(lk, [&]
                  {
-            return (measurements = getMeasurements()).size() != 0;
+            return !ros::ok() || (measurements = getMeasurements()).size() != 0;
                  });
+        if (!ros::ok())
+            break;
         lk.unlock();
         m_estimator.lock();
         for (auto &measurement : measurements)
         {
-            auto img_msg = measurement.second;
+            auto img_msg = measurement.feature;
             double dx = 0, dy = 0, dz = 0, rx = 0, ry = 0, rz = 0;
-            for (auto &imu_msg : measurement.first)
+            for (auto &imu_msg : measurement.imus)
             {
                 double t = imu_msg->header.stamp.toSec();
                 double img_t = img_msg->header.stamp.toSec() + estimator.td;
@@ -321,7 +362,15 @@ void process()
                 image[feature_id].emplace_back(camera_id,  xyz_uv_velocity_depth);
             }
 
-            estimator.processImage(image, img_msg->header);
+            vector<Vector3d> depth_points;
+            if (measurement.depth_cloud != NULL)
+            {
+                depth_points.reserve(measurement.depth_cloud->points.size());
+                for (const geometry_msgs::Point32 &point : measurement.depth_cloud->points)
+                    depth_points.emplace_back(point.x, point.y, point.z);
+            }
+
+            estimator.processImage(image, img_msg->header, depth_points);
 
             double whole_t = t_s.toc();
 
@@ -365,12 +414,16 @@ int main(int argc, char **argv)
 
     ros::Subscriber sub_imu = n.subscribe(IMU_TOPIC, 2000, imu_callback, ros::TransportHints().tcpNoDelay());
     ros::Subscriber sub_image = n.subscribe("/feature_tracker/feature", 2000, feature_callback);
+    ros::Subscriber sub_depth_cloud = n.subscribe("/feature_tracker/depth_cloud", 2000, depth_cloud_callback);
     ros::Subscriber sub_restart = n.subscribe("/feature_tracker/restart", 2000, restart_callback);
     //topic from pose_graph, notify if there's relocalization
     ros::Subscriber sub_relo_points = n.subscribe("/pose_graph/match_points", 2000, relocalization_callback);
 
     std::thread measurement_process{process};
     ros::spin();
+    con.notify_all();
+    if (measurement_process.joinable())
+        measurement_process.join();
 
     return 0;
 }

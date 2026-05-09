@@ -1,25 +1,154 @@
 <launch>
     <arg name="config_path" default = "$(find feature_tracker)/../config/realsense/realsense_color_config.yaml" />
     <arg name="depth_config_path" default = "$(find feature_tracker)/../config/realsense/realsense_depth_config.yaml" />
+    <arg name="voxblox_config_path" default = "$(find feature_tracker)/../config/voxblox/voxblox_config.yaml" />
 	  <arg name="vins_path" default = "$(find feature_tracker)/../config/../" />
+    <arg name="use_zero_dce" default="true" />
+    <arg name="zero_dce_use_onnx" default="true" />
+    <arg name="zero_dce_input_topic" default="/camera/color/image_raw" />
+    <arg name="zero_dce_output_topic" default="/zero_dce/image_enhanced" />
+    <arg name="zero_dce_model_path" default="$(find feature_tracker)/models/zero_dce_plus_epoch99.pth" />
+    <arg name="zero_dce_onnx_model_path" default="$(find feature_tracker)/models/zero_dce_plus_480x640_sf12.onnx" />
+    <arg name="zero_dce_use_gpu" default="true" />
+    <arg name="zero_dce_scale_factor" default="12" />
+    <arg name="zero_dce_profile" default="false" />
+    <arg name="zero_dce_torch_threads" default="1" />
+    <arg name="zero_dce_intra_op_num_threads" default="1" />
+    <arg name="zero_dce_queue_size" default="2" />
+
+    <node if="$(eval arg('use_zero_dce') and not arg('zero_dce_use_onnx'))" name="zero_dce_enhancer" pkg="feature_tracker" type="zero_dce_enhancer_node.py" output="screen">
+        <param name="input_topic" type="string" value="$(arg zero_dce_input_topic)" />
+        <param name="output_topic" type="string" value="$(arg zero_dce_output_topic)" />
+        <param name="model_path" type="string" value="$(arg zero_dce_model_path)" />
+        <param name="use_gpu" type="bool" value="$(arg zero_dce_use_gpu)" />
+        <param name="scale_factor" type="int" value="$(arg zero_dce_scale_factor)" />
+        <param name="profile" type="bool" value="$(arg zero_dce_profile)" />
+        <param name="torch_threads" type="int" value="$(arg zero_dce_torch_threads)" />
+        <param name="queue_size" type="int" value="$(arg zero_dce_queue_size)" />
+    </node>
+
+    <node if="$(eval arg('use_zero_dce') and arg('zero_dce_use_onnx'))" name="zero_dce_onnx_enhancer" pkg="feature_tracker" type="zero_dce_onnx_enhancer" output="screen">
+        <param name="input_topic" type="string" value="$(arg zero_dce_input_topic)" />
+        <param name="output_topic" type="string" value="$(arg zero_dce_output_topic)" />
+        <param name="model_path" type="string" value="$(arg zero_dce_onnx_model_path)" />
+        <param name="profile" type="bool" value="$(arg zero_dce_profile)" />
+        <param name="intra_op_num_threads" type="int" value="$(arg zero_dce_intra_op_num_threads)" />
+        <param name="queue_size" type="int" value="$(arg zero_dce_queue_size)" />
+    </node>
+
+    <arg name="use_depth_to_map" default="1" />
+    <arg name="use_depth_to_map_pose_graph" default="1" />
+    <arg name="depth_map_weight" default="100.0" />
+    <arg name="depth_map_huber" default="1.0" />
+    <arg name="depth_map_min_edges" default="50" />
+    <arg name="depth_map_max_edges_per_frame" default="800" />
+    <arg name="depth_map_neighbor_count" default="5" />
+    <arg name="depth_map_max_neighbor_dist" default="1.0" />
+    <arg name="depth_map_plane_max_dist" default="0.2" />
+    <arg name="depth_map_min_scale" default="0.1" />
+    <arg name="depth_map_uncertainty_enable" default="0" />
+    <arg name="depth_map_uncertainty_min_weight" default="0.20" />
+    <arg name="depth_map_uncertainty_max_weight" default="1.00" />
+    <arg name="depth_map_uncertainty_range" default="4.0" />
+    <arg name="depth_map_uncertainty_plane_sigma" default="0.05" />
+    <arg name="depth_map_uncertainty_residual_sigma" default="0.10" />
+    <arg name="depth_map_pose_graph_target_keyframes" default="5" />
+    <arg name="depth_map_pose_graph_opt_interval" default="10" />
+    <arg name="depth_cloud_sync_tol" default="0.02" />
+    <arg name="use_structural_planes" default="0" />
+    <arg name="struct_plane_min_inliers" default="120" />
+    <arg name="struct_plane_distance_threshold" default="0.04" />
+    <arg name="struct_plane_normal_merge_deg" default="10.0" />
+    <arg name="struct_plane_distance_merge" default="0.25" />
+    <arg name="struct_plane_weight" default="30.0" />
+    <arg name="struct_plane_huber" default="0.10" />
+    <arg name="struct_plane_max_planes_per_keyframe" default="3" />
+    <arg name="struct_plane_enable_ground" default="1" />
+    <arg name="struct_plane_enable_walls" default="1" />
+    <arg name="loop_geom_verify" default="1" />
+    <arg name="loop_min_bow_score" default="0.05" />
+    <arg name="loop_candidate_score" default="0.015" />
+    <arg name="loop_enable_fundamental_check" default="1" />
+    <arg name="loop_fundamental_threshold_px" default="2.0" />
+    <arg name="loop_min_pnp_inliers" default="35" />
+    <arg name="loop_min_inlier_ratio" default="0.30" />
+    <arg name="loop_max_yaw_deg" default="25.0" />
+    <arg name="loop_max_translation_m" default="12.0" />
+    <arg name="loop_teaser_enable" default="1" />
     
     <node name="feature_tracker" pkg="feature_tracker" type="feature_tracker" output="screen">
         <param name="config_file" type="string" value="$(arg config_path)" />
         <param name="depth_config_file" type="string" value="$(arg depth_config_path)" />
         <param name="vins_folder" type="string" value="$(arg vins_path)" />
+        <param if="$(arg use_zero_dce)" name="image_topic" type="string" value="$(arg zero_dce_output_topic)" />
     </node>
 
     <node name="vins_estimator" pkg="vins_estimator" type="vins_estimator" output="screen">
        <param name="config_file" type="string" value="$(arg config_path)" />
        <param name="vins_folder" type="string" value="$(arg vins_path)" />
+       <param name="use_depth_to_map" type="int" value="$(arg use_depth_to_map)" />
+       <param name="depth_map_weight" type="double" value="$(arg depth_map_weight)" />
+       <param name="depth_map_huber" type="double" value="$(arg depth_map_huber)" />
+       <param name="depth_map_min_edges" type="int" value="$(arg depth_map_min_edges)" />
+       <param name="depth_map_max_edges_per_frame" type="int" value="$(arg depth_map_max_edges_per_frame)" />
+       <param name="depth_map_neighbor_count" type="int" value="$(arg depth_map_neighbor_count)" />
+       <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
+       <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
+       <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+       <param name="depth_map_uncertainty_enable" type="int" value="$(arg depth_map_uncertainty_enable)" />
+       <param name="depth_map_uncertainty_min_weight" type="double" value="$(arg depth_map_uncertainty_min_weight)" />
+       <param name="depth_map_uncertainty_max_weight" type="double" value="$(arg depth_map_uncertainty_max_weight)" />
+       <param name="depth_map_uncertainty_range" type="double" value="$(arg depth_map_uncertainty_range)" />
+       <param name="depth_map_uncertainty_plane_sigma" type="double" value="$(arg depth_map_uncertainty_plane_sigma)" />
+       <param name="depth_map_uncertainty_residual_sigma" type="double" value="$(arg depth_map_uncertainty_residual_sigma)" />
+       <param name="depth_cloud_sync_tol" type="double" value="$(arg depth_cloud_sync_tol)" />
     </node>
 
     <node name="pose_graph" pkg="pose_graph" type="pose_graph" output="screen">
         <param name="config_file" type="string" value="$(arg config_path)" />
+        <rosparam command="load" file="$(arg voxblox_config_path)" ns="voxblox" />
+        <param if="$(arg use_zero_dce)" name="image_topic" type="string" value="$(arg zero_dce_output_topic)" />
         <param name="visualization_shift_x" type="int" value="0" />
         <param name="visualization_shift_y" type="int" value="0" />
         <param name="skip_cnt" type="int" value="0" />
         <param name="skip_dis" type="double" value="0" />
+        <param name="use_depth_to_map_pose_graph" type="int" value="$(arg use_depth_to_map_pose_graph)" />
+        <param name="depth_map_weight" type="double" value="$(arg depth_map_weight)" />
+        <param name="depth_map_huber" type="double" value="$(arg depth_map_huber)" />
+        <param name="depth_map_min_edges" type="int" value="$(arg depth_map_min_edges)" />
+        <param name="depth_map_max_edges_per_frame" type="int" value="$(arg depth_map_max_edges_per_frame)" />
+        <param name="depth_map_neighbor_count" type="int" value="$(arg depth_map_neighbor_count)" />
+        <param name="depth_map_max_neighbor_dist" type="double" value="$(arg depth_map_max_neighbor_dist)" />
+        <param name="depth_map_plane_max_dist" type="double" value="$(arg depth_map_plane_max_dist)" />
+        <param name="depth_map_min_scale" type="double" value="$(arg depth_map_min_scale)" />
+        <param name="depth_map_uncertainty_enable" type="int" value="$(arg depth_map_uncertainty_enable)" />
+        <param name="depth_map_uncertainty_min_weight" type="double" value="$(arg depth_map_uncertainty_min_weight)" />
+        <param name="depth_map_uncertainty_max_weight" type="double" value="$(arg depth_map_uncertainty_max_weight)" />
+        <param name="depth_map_uncertainty_range" type="double" value="$(arg depth_map_uncertainty_range)" />
+        <param name="depth_map_uncertainty_plane_sigma" type="double" value="$(arg depth_map_uncertainty_plane_sigma)" />
+        <param name="depth_map_uncertainty_residual_sigma" type="double" value="$(arg depth_map_uncertainty_residual_sigma)" />
+        <param name="depth_map_pose_graph_target_keyframes" type="int" value="$(arg depth_map_pose_graph_target_keyframes)" />
+        <param name="depth_map_pose_graph_opt_interval" type="int" value="$(arg depth_map_pose_graph_opt_interval)" />
+        <param name="use_structural_planes" type="int" value="$(arg use_structural_planes)" />
+        <param name="struct_plane_min_inliers" type="int" value="$(arg struct_plane_min_inliers)" />
+        <param name="struct_plane_distance_threshold" type="double" value="$(arg struct_plane_distance_threshold)" />
+        <param name="struct_plane_normal_merge_deg" type="double" value="$(arg struct_plane_normal_merge_deg)" />
+        <param name="struct_plane_distance_merge" type="double" value="$(arg struct_plane_distance_merge)" />
+        <param name="struct_plane_weight" type="double" value="$(arg struct_plane_weight)" />
+        <param name="struct_plane_huber" type="double" value="$(arg struct_plane_huber)" />
+        <param name="struct_plane_max_planes_per_keyframe" type="int" value="$(arg struct_plane_max_planes_per_keyframe)" />
+        <param name="struct_plane_enable_ground" type="int" value="$(arg struct_plane_enable_ground)" />
+        <param name="struct_plane_enable_walls" type="int" value="$(arg struct_plane_enable_walls)" />
+        <param name="loop_geom_verify" type="int" value="$(arg loop_geom_verify)" />
+        <param name="loop_min_bow_score" type="double" value="$(arg loop_min_bow_score)" />
+        <param name="loop_candidate_score" type="double" value="$(arg loop_candidate_score)" />
+        <param name="loop_enable_fundamental_check" type="int" value="$(arg loop_enable_fundamental_check)" />
+        <param name="loop_fundamental_threshold_px" type="double" value="$(arg loop_fundamental_threshold_px)" />
+        <param name="loop_min_pnp_inliers" type="int" value="$(arg loop_min_pnp_inliers)" />
+        <param name="loop_min_inlier_ratio" type="double" value="$(arg loop_min_inlier_ratio)" />
+        <param name="loop_max_yaw_deg" type="double" value="$(arg loop_max_yaw_deg)" />
+        <param name="loop_max_translation_m" type="double" value="$(arg loop_max_translation_m)" />
+        <param name="loop_teaser_enable" type="int" value="$(arg loop_teaser_enable)" />
     </node>
 
 </launch>

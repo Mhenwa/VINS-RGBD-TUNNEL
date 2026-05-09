@@ -19,11 +19,11 @@
 ## 1. 文件说明
 
 - `docker/Dockerfile`
-  - 构建 ROS Melodic 镜像，并预装 Ceres、PCL、OpenCV、catkin_tools。
+  - 构建 ROS Melodic 镜像，并预装 Ceres、PCL、OpenCV、catkin_tools 和 Voxblox 源码构建依赖。
 - `docker/run_container.sh`
   - 只负责启动容器和挂载目录，不做编译。
 - `docker/build_in_container.sh`
-  - 只负责在容器内创建 catkin workspace 并编译。
+  - 只负责在容器内创建 catkin workspace，拉取固定版本 Voxblox 依赖并编译。
 
 ## 2. 第一步：构建镜像
 
@@ -90,11 +90,32 @@ source /workspace/VINS-RGBD/.docker_catkin_ws/devel/setup.bash
 roslaunch vins_estimator realsense_color.launch
 ```
 
+如果要启用 Zero-DCE++ 低照度增强，把 launch 参数打开：
+
+```bash
+roslaunch vins_estimator realsense_color.launch use_zero_dce:=true
+```
+
+这会启动 `feature_tracker/scripts/zero_dce_enhancer_node.py`，订阅 `/camera/color/image_raw`，
+发布 `/zero_dce/image_enhanced`，并把 `feature_tracker` 和 `pose_graph` 的图像输入切到增强后的 topic。
+默认使用 `feature_tracker/models/zero_dce_plus_epoch99.pth`，`zero_dce_scale_factor:=12`。
+
+如果要使用 C++ ONNX Runtime CPU 版增强节点，把 ONNX 参数打开：
+
+```bash
+roslaunch vins_estimator realsense_color.launch use_zero_dce:=true zero_dce_use_onnx:=true
+```
+
+这会使用 `feature_tracker/models/zero_dce_plus_480x640_sf12.onnx`，固定支持当前
+Ground-Challenge/Realsense 配置的 `640x480` 图像。
+
 这个 launch 会同时启动：
 
 - `feature_tracker`
 - `vins_estimator`
 - `pose_graph`
+
+`pose_graph` 会在后端内嵌 Voxblox，默认发布 `/pose_graph/voxblox/mesh`、TSDF/ESDF 点云、切片和 ESDF layer。深度关键帧会从同步彩色图像采样 RGB，因此 legacy `/pose_graph/octree`、保存的 PCD、Voxblox mesh 和 `mesh.ply` 都是彩色输出。容器内可用 `rosservice call /pose_graph/save_map` 保存 pose graph 和 Voxblox sidecar map。
 
 ## 6. 第五步：回放 bag
 
@@ -159,6 +180,11 @@ roslaunch vins_estimator vins_rviz.launch
 - 宿主机输出结果：
 ```bash
 <repo>/output
+```
+
+- Voxblox map 和 mesh：
+```bash
+<repo>/output/voxblox
 ```
 
 ## 9. 最小使用流程

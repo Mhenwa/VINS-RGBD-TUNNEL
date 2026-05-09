@@ -18,6 +18,7 @@
 #include "factor/projection_factor.h"
 #include "factor/projection_td_factor.h"
 #include "factor/marginalization_factor.h"
+#include "factor/depth_to_map_factor.h"
 
 #include <unordered_map>
 #include <queue>
@@ -32,7 +33,9 @@ class Estimator
 
     // interface
     void processIMU(double t, const Vector3d &linear_acceleration, const Vector3d &angular_velocity);
-    void processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 8, 1>>>> &image, const std_msgs::Header &header);
+    void processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 8, 1>>>> &image,
+                      const std_msgs::Header &header,
+                      const vector<Vector3d> &depth_cloud = vector<Vector3d>());
     void setReloFrame(double _frame_stamp, int _frame_index, vector<Vector3d> &_match_points, Vector3d _relo_t, Matrix3d _relo_r);
 
     // internal
@@ -91,6 +94,7 @@ class Estimator
     vector<double> dt_buf[(WINDOW_SIZE + 1)];
     vector<Vector3d> linear_acceleration_buf[(WINDOW_SIZE + 1)];
     vector<Vector3d> angular_velocity_buf[(WINDOW_SIZE + 1)];
+    vector<Vector3d> depth_clouds[(WINDOW_SIZE + 1)];
 
     int frame_count;
     int sum_of_outlier, sum_of_back, sum_of_front, sum_of_invalid;
