@@ -452,7 +452,7 @@ python3 tools/run_ablation_eval.py \
 - `depth_map_uncertainty_enable: 0`
 - `use_structural_planes: 0`
 
-不确定性权重和平面结构约束保留为注释掉的实验参考代码，当前 final branch 不允许通过 launch 参数实际启用。
+不确定性权重和平面结构约束保留为注释掉的实验参考代码，当前最终版本不允许通过 launch 参数实际启用。
 
 ## SubSurfaceGeoRobo ZED2 数据运行
 
