@@ -51,6 +51,7 @@ int skip_cnt = 0;
 bool load_flag = 0;
 bool start_flag = 0;
 double SKIP_DIS = 0;
+double IMAGE_DISCONTINUE_THRESHOLD = 1.0;
 
 float PCL_MAX_DIST, PCL_MIN_DIST, RESOLUTION;
 int PCL_FILTER_MIN_DENSITY = 2;
@@ -334,7 +335,8 @@ void image_callback(const sensor_msgs::ImageConstPtr &image_msg, const sensor_ms
     // detect unstable camera stream
     if (last_image_time == -1)
         last_image_time = image_msg->header.stamp.toSec();
-    else if (image_msg->header.stamp.toSec() - last_image_time > 1.0 || image_msg->header.stamp.toSec() < last_image_time)
+    else if (image_msg->header.stamp.toSec() - last_image_time > IMAGE_DISCONTINUE_THRESHOLD ||
+             image_msg->header.stamp.toSec() < last_image_time)
     {
         ROS_WARN("image discontinue! detect a new sequence!");
         new_sequence();
@@ -977,6 +979,8 @@ int main(int argc, char **argv)
             LOOP_TEASER_MIN_INLIERS = fsSettings["loop_teaser_min_inliers"];
         if (!fsSettings["loop_teaser_max_rmse"].empty())
             LOOP_TEASER_MAX_RMSE = fsSettings["loop_teaser_max_rmse"];
+        if (!fsSettings["image_discontinue_threshold"].empty())
+            IMAGE_DISCONTINUE_THRESHOLD = fsSettings["image_discontinue_threshold"];
 
         readOptionalRosParam(n, "use_depth_to_map_pose_graph", USE_DEPTH_TO_MAP_POSE_GRAPH);
         readOptionalRosParam(n, "depth_map_weight", DEPTH_MAP_WEIGHT);
@@ -1018,6 +1022,7 @@ int main(int argc, char **argv)
         readOptionalRosParam(n, "loop_teaser_noise_bound", LOOP_TEASER_NOISE_BOUND);
         readOptionalRosParam(n, "loop_teaser_min_inliers", LOOP_TEASER_MIN_INLIERS);
         readOptionalRosParam(n, "loop_teaser_max_rmse", LOOP_TEASER_MAX_RMSE);
+        readOptionalRosParam(n, "image_discontinue_threshold", IMAGE_DISCONTINUE_THRESHOLD);
 
         if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
             DEPTH_MAP_NEIGHBOR_COUNT = 3;
@@ -1045,6 +1050,10 @@ int main(int argc, char **argv)
             DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA = 0.05;
         if (DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA <= 0.0)
             DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA = 0.10;
+        // Keep the experimental parameters parseable, but force them off in the
+        // final branch after darkroom1/2/3 showed no stable benefit.
+        DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+        USE_STRUCTURAL_PLANES = 0;
         if (STRUCT_PLANE_MIN_INLIERS < 3)
             STRUCT_PLANE_MIN_INLIERS = 3;
         if (STRUCT_PLANE_DISTANCE_THRESHOLD <= 0.0)
@@ -1086,6 +1095,7 @@ int main(int argc, char **argv)
                  LOOP_ENABLE_FUNDAMENTAL_CHECK, LOOP_FUNDAMENTAL_THRESHOLD_PX,
                  LOOP_MIN_PNP_INLIERS, LOOP_MIN_INLIER_RATIO,
                  LOOP_MAX_YAW_DEG, LOOP_MAX_TRANSLATION_M, LOOP_TEASER_ENABLE);
+        ROS_INFO("image discontinue threshold: %.2f s", IMAGE_DISCONTINUE_THRESHOLD);
         //OctreePointCloudDensity has no ::Ptr
         posegraph.octree = new pcl::octree::OctreePointCloudDensity<pcl::PointXYZ>(RESOLUTION);
 	    posegraph.cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());

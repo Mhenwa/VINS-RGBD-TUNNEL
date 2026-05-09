@@ -1,6 +1,155 @@
 2026.5.7
 
-当前 `final_feature` 默认启用完整系统：Zero-DCE++ ONNX C++ 低照增强、Depth-to-map 约束、Voxblox 稠密建图。不要用 `sudo` 进容器。
+当前最终版本默认启用完整系统：Zero-DCE++ ONNX C++ 低照增强、Depth-to-map 约束、Voxblox 稠密建图、回环几何验证。不要用 `sudo` 进容器。
+
+## 相比原版 VINS-RGBD 的主要改进
+
+本分支是在原版 VINS-RGBD 的 RGB-D VIO、pose graph、回环和稀疏/半稠密点云基础上，面向黑暗、低纹理巷道和稠密重建需求做的工程增强。最终默认启用的是经过 darkroom 系列 bag 验证后保留的模块。
+
+### 1. Zero-DCE++ ONNX C++ 低照增强
+
+原版 VINS-RGBD 直接使用相机 RGB 图像做 KLT 光流和 BRIEF 回环描述子。低照场景下，图像对比度低、可跟踪角点少，前端容易退化。
+
+本项目新增：
+
+- `feature_tracker` 下的 Zero-DCE++ 模型权重和 ONNX 导出流程。
+- C++ ROS 节点 `zero_dce_onnx_enhancer`，使用 ONNX Runtime CPU 推理，不依赖 PyTorch 运行时。
+- Python/PyTorch Zero-DCE++ 节点作为 fallback 保留。
+- `realsense_color.launch` 中通过 `use_zero_dce` 和 `zero_dce_use_onnx` 控制开关。
+- RViz 对比配置 `config/zero_dce_compare.rviz`，可同时看原始图和增强图。
+
+默认数据流变为：
+
+```text
+/camera/color/image_raw -> /zero_dce/image_enhanced -> feature_tracker / pose_graph
+```
+
+在 darkroom 测试中，ONNX C++ 节点 CPU 上约 15 Hz，前端和里程计保持约 10 Hz。
+
+### 2. Depth-to-map 几何约束
+
+原版 VINS-RGBD 主要使用特征重投影、IMU 预积分、深度辅助初始化和 pose graph 优化。深度图更多用于给特征点赋深度和生成点云，没有把当前帧深度与历史局部地图直接构成几何约束。
+
+本项目新增：
+
+- VIO 滑窗内的 Depth-to-map residual。
+- Pose graph 后端中的 Depth-to-map residual。
+- 基于历史关键帧深度云的局部平面拟合。
+- 深度点到局部地图平面的残差。
+- 参数化开关：
+  - `use_depth_to_map`
+  - `use_depth_to_map_pose_graph`
+  - `depth_map_weight`
+  - `depth_map_huber`
+  - `depth_map_min_edges`
+  - `depth_map_max_edges_per_frame`
+  - `depth_cloud_sync_tol`
+
+这部分对 darkroom 低纹理场景有实际帮助，因为 RGB 特征弱时，深度几何可以给位姿提供额外约束。
+
+### 3. Voxblox TSDF/ESDF 稠密建图
+
+原版 VINS-RGBD 的建图更接近点云/Octree 输出，不是面向高质量稠密表面重建的 TSDF pipeline。
+
+本项目在 `pose_graph` 后端集成 Voxblox：
+
+- 发布 TSDF/ESDF 点云和 mesh。
+- 保存 `output/voxblox/map.vxblx`。
+- 保存彩色 `output/voxblox/mesh.ply`。
+- 保留 legacy PCD / Octree 输出。
+- 支持正常 `Ctrl+C` 退出自动保存。
+- 用关键帧位姿和深度图做 TSDF 融合。
+- 从同步 RGB 图像采样颜色，生成彩色 mesh。
+
+相关输出：
+
+- `/pose_graph/voxblox/mesh`
+- `/pose_graph/voxblox/surface_pointcloud`
+- `/pose_graph/voxblox/tsdf_pointcloud`
+- `/pose_graph/voxblox/esdf_pointcloud`
+- `output/voxblox/map.vxblx`
+- `output/voxblox/mesh.ply`
+
+### 4. 回环几何验证
+
+原版 VINS-RGBD 使用 BoW/BRIEF 和 PnP 流程做回环。巷道、墙面、重复结构场景中，单纯外观相似容易产生误回环。
+
+本项目增强了回环验证：
+
+- BoW 分数阈值参数化。
+- 回环候选阈值参数化。
+- Fundamental Matrix RANSAC 前置过滤。
+- PnP inlier 数和 inlier ratio 门限参数化。
+- yaw / translation 几何门限。
+- 回环诊断日志输出匹配数、F-check、PnP inliers 等信息。
+
+关键参数：
+
+- `loop_geom_verify`
+- `loop_enable_fundamental_check`
+- `loop_fundamental_threshold_px`
+- `loop_min_pnp_inliers`
+- `loop_min_inlier_ratio`
+- `loop_max_yaw_deg`
+- `loop_max_translation_m`
+
+darkroom1 上开启回环几何验证后，ATE RMSE 从约 `0.333 m` 降到约 `0.309 m`。
+
+### 5. 前端与同步稳定性改进
+
+除四个主模块外，还保留了一些 VINS 侧的小改动：
+
+- LK forward-backward check：过滤不稳定光流点。
+- `image_discontinue_threshold` 参数化：避免低速播放或深度慢时误判新序列。
+- 图像/深度 ApproximateTime 同步队列加大。
+- feature/depth cloud 同步容差 `depth_cloud_sync_tol`。
+- 稠密深度中值滤波、边缘过滤、自适应采样。
+- 统一输出目录到 `output/`。
+- 自动化评测脚本记录 ATE、轨迹图、topic Hz、端到端延迟。
+- 独立 ROS master 端口选项，避免交互运行和批量评测互相污染参数。
+
+### 6. SubSurfaceGeoRobo / ZED2 支持
+
+为 `/home/mhenwa/slam/bags/SubSurfaceGeoRobo/` 这类 ZED2 双目数据新增：
+
+- `vins_estimator/launch/subsurface_georobo.launch`
+- ZED2 stereo depth 节点 `feature_tracker/scripts/zed2_stereo_depth_node.py`
+- 低分辨率配置 `config/subsurface_georobo/zed2_robot_imu_lowres_config.yaml`
+- 低分辨率深度配置 `config/subsurface_georobo/zed2_lowres_depth_config.yaml`
+- 针对跟踪断流的 `image_discontinue_threshold` 调整
+
+该路径用于 ZED2 左右目图像在线生成深度，再进入 VINS-RGBD/Voxblox 流程。
+
+### 7. 已验证后禁用的实验模块
+
+下面两个方向已经实现过，但 darkroom1/2/3 完整测试没有稳定收益，因此最终版本强制禁用，只保留注释掉的参考代码：
+
+- Depth-to-map 不确定性权重
+- 轻量地面/墙面结构平面约束
+
+当前即使通过 launch 传入 `depth_map_uncertainty_enable:=1` 或 `use_structural_planes:=1`，代码也会强制关闭，避免误用。
+
+## Darkroom 评测结论
+
+最终推荐系统是：
+
+```text
+Zero-DCE++ ONNX + Depth-to-map + Voxblox + 回环几何验证
+```
+
+在 darkroom 系列上，相比关闭 Zero-DCE、Depth-to-map、回环几何验证的 baseline，完整系统整体提升：
+
+| Seq | baseline ATE RMSE m | full ATE RMSE m | 变化 |
+| --- | ---: | ---: | ---: |
+| darkroom1 | 0.4305 | 约 0.3431，历史最佳约 0.3089 | 提升 |
+| darkroom2 | 0.8453 | 0.4549 | -46.2% |
+| darkroom3 | 0.7502 | 0.5727 | -23.7% |
+
+说明：
+
+- Zero-DCE++、Depth-to-map 和回环几何验证直接影响轨迹精度。
+- Voxblox 主要提升稠密建图和 mesh 输出能力，不应单独用 ATE 判断收益。
+- Normal.bag 不是主要优化目标；Release/RealSense 配置保留可关闭各模块的参数。
 
 ## 快速开始
 
@@ -205,11 +354,9 @@ rosservice call /pose_graph/save_map
 
 额外可选的 darkroom 优化消融：
 
-- `uncertainty_only`：在 `full` 基础上开启 Depth-to-map 不确定性权重
-- `planes_only`：在 `full` 基础上开启轻量地面/墙面平面约束
 - `loop_geom_only`：在 `full` 基础上开启回环几何验证
-- `planes_loop`：同时开启平面约束和回环几何验证
-- `full_optimized`：同时开启不确定性权重、平面约束和回环几何验证
+
+Depth-to-map 不确定性权重和轻量地面/墙面平面约束已经退回为禁用实验代码，不再作为可运行消融 variant 暴露。完整 darkroom1/2/3 测试显示它们没有稳定收益。
 
 完整命令：
 
@@ -243,10 +390,7 @@ python3 tools/run_ablation_eval.py \
   --skip-build \
   --sequence darkroom1 \
   --variant full \
-  --variant uncertainty_only \
-  --variant planes_only \
-  --variant loop_geom_only \
-  --variant full_optimized
+  --variant loop_geom_only
 ```
 
 每个 variant 会输出：
@@ -308,7 +452,7 @@ python3 tools/run_ablation_eval.py \
 - `depth_map_uncertainty_enable: 0`
 - `use_structural_planes: 0`
 
-不确定性权重和平面结构约束代码保留为开关，后续需要继续调权重模型或平面匹配策略后再进入默认路径。
+不确定性权重和平面结构约束保留为注释掉的实验参考代码，当前 final branch 不允许通过 launch 参数实际启用。
 
 ## SubSurfaceGeoRobo ZED2 数据运行
 

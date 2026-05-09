@@ -52,24 +52,6 @@ VARIANTS = {
         "use_structural_planes:=0",
         "loop_geom_verify:=0",
     ],
-    "uncertainty_only": [
-        "use_zero_dce:=true",
-        "zero_dce_use_onnx:=true",
-        "use_depth_to_map:=1",
-        "use_depth_to_map_pose_graph:=1",
-        "depth_map_uncertainty_enable:=1",
-        "use_structural_planes:=0",
-        "loop_geom_verify:=0",
-    ],
-    "planes_only": [
-        "use_zero_dce:=true",
-        "zero_dce_use_onnx:=true",
-        "use_depth_to_map:=1",
-        "use_depth_to_map_pose_graph:=1",
-        "depth_map_uncertainty_enable:=0",
-        "use_structural_planes:=1",
-        "loop_geom_verify:=0",
-    ],
     "loop_geom_only": [
         "use_zero_dce:=true",
         "zero_dce_use_onnx:=true",
@@ -79,24 +61,10 @@ VARIANTS = {
         "use_structural_planes:=0",
         "loop_geom_verify:=1",
     ],
-    "planes_loop": [
-        "use_zero_dce:=true",
-        "zero_dce_use_onnx:=true",
-        "use_depth_to_map:=1",
-        "use_depth_to_map_pose_graph:=1",
-        "depth_map_uncertainty_enable:=0",
-        "use_structural_planes:=1",
-        "loop_geom_verify:=1",
-    ],
-    "full_optimized": [
-        "use_zero_dce:=true",
-        "zero_dce_use_onnx:=true",
-        "use_depth_to_map:=1",
-        "use_depth_to_map_pose_graph:=1",
-        "depth_map_uncertainty_enable:=1",
-        "use_structural_planes:=1",
-        "loop_geom_verify:=1",
-    ],
+    # Retired experiments, intentionally not exposed as runnable variants:
+    # - depth uncertainty weighting
+    # - structural plane constraints
+    # Full darkroom1/2/3 tests showed they are not stable enough for the final branch.
 }
 
 
@@ -104,6 +72,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--normal-bag", default="/home/mhenwa/slam/bags/Normal.bag")
     parser.add_argument("--darkroom-bag", default="/home/mhenwa/slam/bags/darkroom1.bag")
+    parser.add_argument("--darkroom2-bag", default="/home/mhenwa/slam/bags/darkroom2.bag")
+    parser.add_argument("--darkroom3-bag", default="/home/mhenwa/slam/bags/darkroom3.bag")
     parser.add_argument("--gt-root", default="/home/mhenwa/slam/Ground-Challenge/psudo_gt")
     parser.add_argument("--docker-image", default="vins-rgbd:melodic")
     parser.add_argument("--output-root", default=str(REPO_ROOT / "output" / "ablation"))
@@ -111,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timestamp", default=datetime.now().strftime("%Y%m%d_%H%M%S"))
     parser.add_argument("--startup-wait", type=float, default=8.0)
     parser.add_argument("--post-bag-wait", type=float, default=3.0)
+    parser.add_argument("--ros-master-port", type=int, default=11311)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument(
         "--variant",
@@ -121,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sequence",
         action="append",
-        choices=["normal", "darkroom1"],
+        choices=["normal", "darkroom1", "darkroom2", "darkroom3"],
         help="Run only selected sequence(s). Defaults to both.",
     )
     return parser.parse_args()
@@ -175,7 +146,7 @@ def extract_normal_gt(args: argparse.Namespace, normal_bag: Path, out_dir: Path)
 
 
 def launch_args_for_sequence(seq_name: str) -> List[str]:
-    if seq_name == "darkroom1":
+    if seq_name.startswith("darkroom"):
         return [
             "config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_config.yaml",
             "depth_config_path:=/workspace/VINS-RGBD/config/ground_challenge/groundchallenge_depth_config.yaml",
@@ -198,6 +169,7 @@ def run_variant(
         set -o pipefail
         source /opt/ros/melodic/setup.bash
         source .docker_catkin_ws/devel/setup.bash
+        export ROS_MASTER_URI=http://localhost:{args.ros_master_port}
         rm -rf output/vins output/pose_graph output/pcd output/voxblox
         rm -f output/perf_monitor.json output/launch.log output/rosbag.log
         mkdir -p output/vins output/pose_graph output/pcd output/voxblox
@@ -368,7 +340,9 @@ def main() -> int:
     args = parse_args()
     normal_bag = Path(args.normal_bag).expanduser().resolve()
     darkroom_bag = Path(args.darkroom_bag).expanduser().resolve()
-    for bag in (normal_bag, darkroom_bag):
+    darkroom2_bag = Path(args.darkroom2_bag).expanduser().resolve()
+    darkroom3_bag = Path(args.darkroom3_bag).expanduser().resolve()
+    for bag in (normal_bag, darkroom_bag, darkroom2_bag, darkroom3_bag):
         if not bag.is_file():
             raise FileNotFoundError(bag)
 
@@ -378,16 +352,22 @@ def main() -> int:
     if not args.skip_build:
         build_in_docker(args)
 
-    normal_gt = extract_normal_gt(args, normal_bag, out_dir)
-    darkroom_gt = Path(args.gt_root).expanduser().resolve() / "darkroom1.txt"
-    if not darkroom_gt.is_file():
-        raise FileNotFoundError(darkroom_gt)
-
     sequences = args.sequence or ["normal", "darkroom1"]
+    normal_gt = extract_normal_gt(args, normal_bag, out_dir) if "normal" in sequences else None
+    gt_root = Path(args.gt_root).expanduser().resolve()
+    darkroom_gt = gt_root / "darkroom1.txt"
+    darkroom2_gt = gt_root / "darkroom2.txt"
+    darkroom3_gt = gt_root / "darkroom3.txt"
+    for gt in (darkroom_gt, darkroom2_gt, darkroom3_gt):
+        if not gt.is_file():
+            raise FileNotFoundError(gt)
+
     variants = args.variant or ["baseline", "zero_dce_only", "depth_to_map_only", "full"]
     sequence_info = {
         "normal": {"bag": normal_bag, "gt": normal_gt},
         "darkroom1": {"bag": darkroom_bag, "gt": darkroom_gt},
+        "darkroom2": {"bag": darkroom2_bag, "gt": darkroom2_gt},
+        "darkroom3": {"bag": darkroom3_bag, "gt": darkroom3_gt},
     }
 
     rows = []

@@ -39,7 +39,8 @@ void img_callback(const sensor_msgs::ImageConstPtr &color_msg, const sensor_msgs
         return;
     }
     // detect unstable camera stream
-    if (color_msg->header.stamp.toSec() - last_image_time > 1.0 || color_msg->header.stamp.toSec() < last_image_time)
+    if (color_msg->header.stamp.toSec() - last_image_time > IMAGE_DISCONTINUE_THRESHOLD ||
+        color_msg->header.stamp.toSec() < last_image_time)
     {
         ROS_WARN("image discontinue! reset the feature tracker!");
         first_image_flag = true;

@@ -108,8 +108,13 @@ bool fitPlane(const std::vector<int> &indices,
 
 double depthMapQuality(double depth, double plane_rmse, double abs_distance)
 {
-    if (!DEPTH_MAP_UNCERTAINTY_ENABLE)
-        return 1.0;
+    (void)depth;
+    (void)plane_rmse;
+    (void)abs_distance;
+    // Experimental depth uncertainty weighting is disabled. It is retained here
+    // only as reference code because repeated darkroom3 tests showed divergence.
+    return 1.0;
+/*
     const double range_ratio = depth / DEPTH_MAP_UNCERTAINTY_RANGE;
     const double w_range = 1.0 / (1.0 + range_ratio * range_ratio);
     const double w_plane = std::exp(-plane_rmse / DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
@@ -117,6 +122,7 @@ double depthMapQuality(double depth, double plane_rmse, double abs_distance)
     const double quality = w_range * w_plane * w_residual;
     return std::min(DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT,
                     std::max(DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT, quality));
+*/
 }
 
 Vector3d transformDepthPoint(const Vector3d &point_c, const Matrix3d &R_w_i, const Vector3d &P_w_i)
@@ -124,6 +130,7 @@ Vector3d transformDepthPoint(const Vector3d &point_c, const Matrix3d &R_w_i, con
     return R_w_i * (qi_d * point_c + ti_d) + P_w_i;
 }
 
+/*
 Vector4d transformDepthPlane(const Vector4d &plane_d, const Matrix3d &R_w_i, const Vector3d &P_w_i)
 {
     Vector3d normal_w = (R_w_i * qi_d * plane_d.head<3>()).normalized();
@@ -133,12 +140,17 @@ Vector4d transformDepthPlane(const Vector4d &plane_d, const Matrix3d &R_w_i, con
     plane_w(3) = plane_d(3) - normal_w.dot(depth_origin_w);
     return plane_w;
 }
+*/
 
 std::vector<StructuralPlaneEdge> buildStructuralPlaneEdges(const std::vector<KeyFrame*> &keyframes,
                                                            const Quaterniond *q_array,
                                                            double (*t_array)[3])
 {
     std::vector<StructuralPlaneEdge> edges;
+    // Experimental structural plane constraints are disabled. The first
+    // implementation consistently degraded darkroom1/2/3 ATE.
+    return edges;
+/*
     if (!USE_STRUCTURAL_PLANES || keyframes.size() < 2)
         return edges;
 
@@ -210,6 +222,7 @@ std::vector<StructuralPlaneEdge> buildStructuralPlaneEdges(const std::vector<Key
         }
     }
     return edges;
+*/
 }
 
 std::vector<PoseGraphDepthMapEdge> buildPoseGraphDepthMapEdges(const std::vector<KeyFrame*> &keyframes,

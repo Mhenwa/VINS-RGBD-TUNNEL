@@ -6,6 +6,7 @@
 
     <arg name="left_topic" default="/zed_node/left/image_rect_color" />
     <arg name="right_topic" default="/zed_node/right/image_rect_color" />
+    <arg name="processed_left_topic" default="/subsurface_georobo/zed2/left_resized" />
     <arg name="depth_topic" default="/subsurface_georobo/zed2/depth" />
     <arg name="stereo_depth_profile" default="true" />
     <arg name="stereo_fx" default="537.533" />
@@ -14,6 +15,7 @@
     <arg name="stereo_block_size" default="5" />
     <arg name="stereo_min_depth" default="0.4" />
     <arg name="stereo_max_depth" default="20.0" />
+    <arg name="stereo_resize_scale" default="1.0" />
 
     <arg name="use_zero_dce" default="false" />
     <arg name="use_depth_to_map" default="0" />
@@ -21,10 +23,12 @@
     <arg name="loop_geom_verify" default="1" />
     <arg name="use_structural_planes" default="0" />
     <arg name="depth_map_uncertainty_enable" default="0" />
+    <arg name="image_discontinue_threshold" default="1.0" />
 
     <node name="zed2_stereo_depth" pkg="feature_tracker" type="zed2_stereo_depth_node.py" output="screen">
         <param name="left_topic" type="string" value="$(arg left_topic)" />
         <param name="right_topic" type="string" value="$(arg right_topic)" />
+        <param name="output_left_topic" type="string" value="$(arg processed_left_topic)" />
         <param name="depth_topic" type="string" value="$(arg depth_topic)" />
         <param name="fx" type="double" value="$(arg stereo_fx)" />
         <param name="baseline" type="double" value="$(arg stereo_baseline)" />
@@ -32,6 +36,7 @@
         <param name="block_size" type="int" value="$(arg stereo_block_size)" />
         <param name="min_depth" type="double" value="$(arg stereo_min_depth)" />
         <param name="max_depth" type="double" value="$(arg stereo_max_depth)" />
+        <param name="resize_scale" type="double" value="$(arg stereo_resize_scale)" />
         <param name="profile" type="bool" value="$(arg stereo_depth_profile)" />
     </node>
 
@@ -39,8 +44,9 @@
         <param name="config_file" type="string" value="$(arg config_path)" />
         <param name="depth_config_file" type="string" value="$(arg depth_config_path)" />
         <param name="vins_folder" type="string" value="$(arg vins_path)" />
-        <param name="image_topic" type="string" value="$(arg left_topic)" />
+        <param name="image_topic" type="string" value="$(arg processed_left_topic)" />
         <param name="depth_topic" type="string" value="$(arg depth_topic)" />
+        <param name="image_discontinue_threshold" type="double" value="$(arg image_discontinue_threshold)" />
     </node>
 
     <node name="vins_estimator" pkg="vins_estimator" type="vins_estimator" output="screen">
@@ -53,7 +59,7 @@
     <node name="pose_graph" pkg="pose_graph" type="pose_graph" output="screen">
         <param name="config_file" type="string" value="$(arg config_path)" />
         <rosparam command="load" file="$(arg voxblox_config_path)" ns="voxblox" />
-        <param name="image_topic" type="string" value="$(arg left_topic)" />
+        <param name="image_topic" type="string" value="$(arg processed_left_topic)" />
         <param name="visualization_shift_x" type="int" value="0" />
         <param name="visualization_shift_y" type="int" value="0" />
         <param name="skip_cnt" type="int" value="0" />
@@ -61,5 +67,6 @@
         <param name="use_depth_to_map_pose_graph" type="int" value="$(arg use_depth_to_map_pose_graph)" />
         <param name="use_structural_planes" type="int" value="$(arg use_structural_planes)" />
         <param name="loop_geom_verify" type="int" value="$(arg loop_geom_verify)" />
+        <param name="image_discontinue_threshold" type="double" value="$(arg image_discontinue_threshold)" />
     </node>
 </launch>

@@ -20,6 +20,7 @@ int FISHEYE;
 int LK_FORWARD_BACKWARD_CHECK;
 double LK_MAX_FWD_BWD_ERROR;
 double LK_MAX_TRACK_ERROR;
+double IMAGE_DISCONTINUE_THRESHOLD;
 bool PUB_THIS_FRAME;
 int PCL_DIST;
 int U_BOUNDARY;
@@ -83,15 +84,20 @@ void readParameters(ros::NodeHandle &n)
     LK_FORWARD_BACKWARD_CHECK = 0;
     LK_MAX_FWD_BWD_ERROR = 1.5;
     LK_MAX_TRACK_ERROR = -1.0;
+    IMAGE_DISCONTINUE_THRESHOLD = 1.0;
     if (!fsSettings["lk_forward_backward_check"].empty())
         LK_FORWARD_BACKWARD_CHECK = static_cast<int>(fsSettings["lk_forward_backward_check"]);
     if (!fsSettings["lk_max_fwd_bwd_error"].empty())
         LK_MAX_FWD_BWD_ERROR = static_cast<double>(fsSettings["lk_max_fwd_bwd_error"]);
     if (!fsSettings["lk_max_track_error"].empty())
         LK_MAX_TRACK_ERROR = static_cast<double>(fsSettings["lk_max_track_error"]);
+    if (!fsSettings["image_discontinue_threshold"].empty())
+        IMAGE_DISCONTINUE_THRESHOLD = static_cast<double>(fsSettings["image_discontinue_threshold"]);
+    n.getParam("image_discontinue_threshold", IMAGE_DISCONTINUE_THRESHOLD);
     ROS_INFO_STREAM("LK forward-backward check: " << LK_FORWARD_BACKWARD_CHECK
                     << ", max fb error: " << LK_MAX_FWD_BWD_ERROR
-                    << ", max track error: " << LK_MAX_TRACK_ERROR);
+                    << ", max track error: " << LK_MAX_TRACK_ERROR
+                    << ", image discontinue threshold: " << IMAGE_DISCONTINUE_THRESHOLD);
     PCL_DIST = fsSettings["pcl_dist"];
     U_BOUNDARY = fsSettings["u_boundary"];
     D_BOUNDARY = fsSettings["d_boundary"];

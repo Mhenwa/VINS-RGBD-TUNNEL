@@ -20,6 +20,9 @@ class Zed2StereoDepthNode(object):
 
         self.left_topic = rospy.get_param("~left_topic", "/zed_node/left/image_rect_color")
         self.right_topic = rospy.get_param("~right_topic", "/zed_node/right/image_rect_color")
+        self.output_left_topic = rospy.get_param(
+            "~output_left_topic", "/subsurface_georobo/zed2/left_resized"
+        )
         self.depth_topic = rospy.get_param("~depth_topic", "/subsurface_georobo/zed2/depth")
         self.fx = float(rospy.get_param("~fx", 537.533))
         self.baseline = float(rospy.get_param("~baseline", 0.1190))
@@ -27,6 +30,7 @@ class Zed2StereoDepthNode(object):
         self.max_depth = float(rospy.get_param("~max_depth", 20.0))
         self.queue_size = int(rospy.get_param("~queue_size", 8))
         self.sync_slop = float(rospy.get_param("~sync_slop", 0.03))
+        self.resize_scale = float(rospy.get_param("~resize_scale", 1.0))
         self.profile = bool(rospy.get_param("~profile", False))
 
         block_size = int(rospy.get_param("~block_size", 5))
@@ -50,6 +54,7 @@ class Zed2StereoDepthNode(object):
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
 
+        self.pub_left = rospy.Publisher(self.output_left_topic, Image, queue_size=2)
         self.pub_depth = rospy.Publisher(self.depth_topic, Image, queue_size=2)
         left_sub = message_filters.Subscriber(self.left_topic, Image)
         right_sub = message_filters.Subscriber(self.right_topic, Image)
@@ -60,16 +65,30 @@ class Zed2StereoDepthNode(object):
         self.sync = sync
 
         rospy.loginfo(
-            "ZED2 stereo depth: left=%s right=%s depth=%s fx=%.3f baseline=%.4f",
+            "ZED2 stereo depth: left=%s right=%s output_left=%s depth=%s fx=%.3f baseline=%.4f scale=%.3f",
             self.left_topic,
             self.right_topic,
+            self.output_left_topic,
             self.depth_topic,
             self.fx,
             self.baseline,
+            self.resize_scale,
+        )
+
+    def _resize_if_needed(self, img, interpolation):
+        if abs(self.resize_scale - 1.0) < 1e-6:
+            return img
+        return cv2.resize(
+            img,
+            (0, 0),
+            fx=self.resize_scale,
+            fy=self.resize_scale,
+            interpolation=interpolation,
         )
 
     def _to_gray(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        img = self._resize_if_needed(img, cv2.INTER_AREA)
         if img.ndim == 2:
             return img
         if msg.encoding.lower() in ("bgra8", "rgba8"):
@@ -82,6 +101,8 @@ class Zed2StereoDepthNode(object):
     def callback(self, left_msg, right_msg):
         start = rospy.Time.now()
         try:
+            left_img = self.bridge.imgmsg_to_cv2(left_msg, desired_encoding="passthrough")
+            left_img = self._resize_if_needed(left_img, cv2.INTER_AREA)
             left_gray = self._to_gray(left_msg)
             right_gray = self._to_gray(right_msg)
             disparity = self.matcher.compute(left_gray, right_gray).astype(np.float32) / 16.0
@@ -95,6 +116,9 @@ class Zed2StereoDepthNode(object):
 
             depth_msg = self.bridge.cv2_to_imgmsg(depth_mm, encoding="mono16")
             depth_msg.header = left_msg.header
+            left_out_msg = self.bridge.cv2_to_imgmsg(left_img, encoding=left_msg.encoding)
+            left_out_msg.header = left_msg.header
+            self.pub_left.publish(left_out_msg)
             self.pub_depth.publish(depth_msg)
 
             if self.profile:

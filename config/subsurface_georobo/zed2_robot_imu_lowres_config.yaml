@@ -1,0 +1,139 @@
+%YAML:1.0
+
+imu_topic: "/robot/imu/data"
+image_topic: "/subsurface_georobo/zed2/left_resized"
+depth_topic: "/subsurface_georobo/zed2/depth"
+output_path: "/workspace/VINS-RGBD/output/subsurface_georobo/vins/"
+auto_save_map_on_exit: 1
+
+pcl_dist: 8
+u_boundary: 10
+d_boundary: 10
+l_boundary: 30
+r_boundary: 30
+pcl_min_dist: 0.4
+pcl_max_dist: 12
+resolution: 0.04
+pcl_filter_min_density: 2
+dense_depth_median_kernel: 3
+dense_depth_edge_filter: 1
+dense_depth_edge_threshold: 0.25
+dense_depth_adaptive_sampling: 1
+dense_depth_near_stride: 6
+dense_depth_mid_stride: 12
+dense_depth_far_stride: 18
+dense_depth_near_range: 3.0
+dense_depth_mid_range: 7.0
+dense_depth_max_points_per_keyframe: 9000
+dense_depth_profile: 0
+
+use_depth_to_map: 0
+use_depth_to_map_pose_graph: 0
+depth_map_weight: 50.0
+depth_map_huber: 1.0
+depth_map_min_edges: 50
+depth_map_max_edges_per_frame: 600
+depth_map_neighbor_count: 5
+depth_map_max_neighbor_dist: 1.0
+depth_map_plane_max_dist: 0.25
+depth_map_min_scale: 0.1
+depth_map_uncertainty_enable: 0
+depth_map_uncertainty_min_weight: 0.20
+depth_map_uncertainty_max_weight: 1.00
+depth_map_uncertainty_range: 5.0
+depth_map_uncertainty_plane_sigma: 0.06
+depth_map_uncertainty_residual_sigma: 0.12
+depth_map_pose_graph_target_keyframes: 5
+depth_map_pose_graph_opt_interval: 10
+depth_map_rebuild_each_iteration: 1
+depth_cloud_sync_tol: 0.03
+
+use_structural_planes: 0
+struct_plane_min_inliers: 160
+struct_plane_distance_threshold: 0.06
+struct_plane_normal_merge_deg: 10.0
+struct_plane_distance_merge: 0.30
+struct_plane_weight: 20.0
+struct_plane_huber: 0.12
+struct_plane_max_planes_per_keyframe: 3
+struct_plane_enable_ground: 1
+struct_plane_enable_walls: 1
+
+loop_geom_verify: 1
+loop_min_bow_score: 0.05
+loop_candidate_score: 0.015
+loop_enable_fundamental_check: 1
+loop_fundamental_threshold_px: 2.0
+loop_min_pnp_inliers: 35
+loop_min_inlier_ratio: 0.30
+loop_max_yaw_deg: 25.0
+loop_max_translation_m: 12.0
+loop_teaser_enable: 1
+loop_teaser_noise_bound: 0.10
+loop_teaser_min_inliers: 30
+loop_teaser_max_rmse: 0.20
+
+model_type: PINHOLE
+camera_name: zed2_left_lowres
+image_width: 640
+image_height: 360
+distortion_parameters:
+   k1: 0
+   k2: 0
+   p1: 0
+   p2: 0
+projection_parameters:
+   fx: 268.7665
+   fy: 268.6270
+   cx: 326.0385
+   cy: 181.6150
+
+estimate_extrinsic: 0
+extrinsicRotation: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 0.0000000000, 0.0000000000, 1.0000000000,
+           1.0000000000, 0.0000000000, 0.0000000000,
+           0.0000000000, 1.0000000000, 0.0000000000 ]
+extrinsicTranslation: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [ 0.2350, 0.0400, 0.0518 ]
+
+max_cnt: 180
+min_dist: 12
+freq: 7
+F_threshold: 1.0
+show_track: 1
+equalize: 1
+fisheye: 0
+lk_forward_backward_check: 1
+lk_max_fwd_bwd_error: 1.5
+lk_max_track_error: 35.0
+image_discontinue_threshold: 3.0
+
+max_solver_time: 0.05
+max_num_iterations: 8
+keyframe_parallax: 10.0
+
+acc_n: 0.05
+gyr_n: 0.005
+acc_w: 0.0005
+gyr_w: 0.00005
+g_norm: 9.805
+
+loop_closure: 1
+fast_relocalization: 1
+load_previous_pose_graph: 0
+pose_graph_save_path: "/workspace/VINS-RGBD/output/subsurface_georobo/pose_graph/"
+
+estimate_td: 1
+td: 0.000
+rolling_shutter: 0
+rolling_shutter_tr: 0.0
+
+save_image: 1
+visualize_imu_forward: 0
+visualize_camera_size: 0.4

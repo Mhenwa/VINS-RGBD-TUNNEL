@@ -41,7 +41,10 @@ KeyFrame::KeyFrame(double _time_stamp, int _index, Vector3d &_vio_T_w_i, Matrix3
 	point_3d_depth_color = _point_3d_depth_color;
 	point_3d_depth_color_raw = _point_3d_depth_color;
 	point_id = _point_id;
-	computeStructuralPlanes();
+	// Experimental structural plane extraction is disabled in the final branch.
+	// Darkroom1/2/3 ablation showed consistent ATE regression with this module.
+	// computeStructuralPlanes();
+	structural_planes.clear();
 	has_loop = false;
 	loop_index = -1;
 	has_fast_point = false;

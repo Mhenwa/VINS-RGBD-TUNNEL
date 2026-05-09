@@ -25,6 +25,7 @@ extern int FISHEYE;
 extern int LK_FORWARD_BACKWARD_CHECK;
 extern double LK_MAX_FWD_BWD_ERROR;
 extern double LK_MAX_TRACK_ERROR;
+extern double IMAGE_DISCONTINUE_THRESHOLD;
 extern bool PUB_THIS_FRAME;
 extern int PCL_DIST;
 extern int U_BOUNDARY;

@@ -58,8 +58,13 @@ bool fitPlane(const std::vector<int> &indices,
 
 double depthMapQuality(double depth, double plane_rmse, double abs_distance)
 {
-    if (!DEPTH_MAP_UNCERTAINTY_ENABLE)
-        return 1.0;
+    (void)depth;
+    (void)plane_rmse;
+    (void)abs_distance;
+    // Experimental depth uncertainty weighting is disabled. Darkroom1/2 improved,
+    // but darkroom3 regressed or diverged in repeated full-bag tests.
+    return 1.0;
+/*
     const double range_ratio = depth / DEPTH_MAP_UNCERTAINTY_RANGE;
     const double w_range = 1.0 / (1.0 + range_ratio * range_ratio);
     const double w_plane = std::exp(-plane_rmse / DEPTH_MAP_UNCERTAINTY_PLANE_SIGMA);
@@ -67,6 +72,7 @@ double depthMapQuality(double depth, double plane_rmse, double abs_distance)
     const double quality = w_range * w_plane * w_residual;
     return std::min(DEPTH_MAP_UNCERTAINTY_MAX_WEIGHT,
                     std::max(DEPTH_MAP_UNCERTAINTY_MIN_WEIGHT, quality));
+*/
 }
 
 Vector3d transformCameraPoint(const Vector3d &point_c,

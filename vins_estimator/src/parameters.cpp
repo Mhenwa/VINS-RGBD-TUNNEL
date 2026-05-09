@@ -209,6 +209,10 @@ void readParameters(ros::NodeHandle &n)
     readOptionalRosParam(n, "depth_map_uncertainty_residual_sigma", DEPTH_MAP_UNCERTAINTY_RESIDUAL_SIGMA);
     readOptionalRosParam(n, "depth_cloud_sync_tol", DEPTH_CLOUD_SYNC_TOL);
 
+    // Keep the parameters for compatibility, but do not enable this experiment.
+    // Full darkroom1/2/3 tests showed it is not stable enough for the final branch.
+    DEPTH_MAP_UNCERTAINTY_ENABLE = 0;
+
     if (DEPTH_MAP_NEIGHBOR_COUNT < 3)
         DEPTH_MAP_NEIGHBOR_COUNT = 3;
     if (DEPTH_MAP_MAX_EDGES_PER_FRAME < 1)
